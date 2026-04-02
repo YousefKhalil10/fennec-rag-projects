@@ -1,0 +1,38 @@
+ RAG اختصار لـ Retrieval-Augmented Generation، وده واحد من أهم الأساليب الحديثة
+ في بناء أنظمة الذكاء الاصطناعي، خصوصًا لما تستخدم نماذج اللغة (LLMs) زي GPT.
+ RAG بيجمع بين Retrieval (الاسترجاع) و Generation (التوليد).
+
+ مكونات RAG الأساسية:
+ 1. Document Loader - تحميل البيانات من PDF, TXT, HTML
+ 2. Text Chunking - تقسيم النصوص لقطع صغيرة (chunks)
+ 3. Embeddings - تحويل النصوص لـ vectors باستخدام OpenAI أو Sentence Transformers
+ 4. Vector Database - تخزين والبحث في الـ vectors (FAISS, ChromaDB, Pinecone)
+ 5. Retriever - يجيب أفضل chunks مناسبة للسؤال
+ 6. LLM - يولد الإجابة النهائية
+ مميزات RAG:
+ - معلومات محدثة ومش معتمد على training فقط
+ - يقلل hallucination (الهبد في الإجابات)
+ - يشتغل على بياناتك الخاصة (Private data)
+ - مناسب للـ Chatbots و QA systems
+ - يدعم اللغة العربية بشكل ممتاز
+ عيوب RAG:
+ - latency أعلى لأن فيه search + generation
+ - محتاج tuning كويس في chunk size وتعديل top-k
+ - جودة الإجابة بتعتمد على جودة الـ retrieval
+ الفرق بين RAG و Fine-tuning:
+ RAG: بيستخدم داتا خارجية وقت التشغيل، سريع في التحديث، مناسب للـ dynamic data
+ Fine-tuning: بيدرب النموذج نفسه، بطيء ومكلف، مناسب لتغيير behavior النموذج
+ نصايح لبناء RAG قوي:
+ - استخدم chunking ذكي (semantic مش fixed بس)
+ - جرب reranking لتحسين جودة النتائج
+ - استخدم hybrid search (BM25 + vector search)
+ - اعمل caching لتسريع الاستجابة
+ - راقب hallucination باستمرار
+ Pipeline الـ RAG الأساسي:
+ 1. User Query: المستخدم يسأل سؤال
+ 2. Embedding: نحول السؤال لـ vector (أرقام)
+ 3. Search/Retrieval: نبحث في قاعدة بيانات vector
+ 4. Top-K Documents: نجيب أفضل نصوص مرتبطة بالسؤال
+ 5. Prompt Construction: نحط النصوص + السؤال في Prompt
+ 6. LLM Response: النموذج يولد الإجابة بناءً على السياق
+ 

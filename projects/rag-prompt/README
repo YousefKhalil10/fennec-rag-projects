@@ -1,0 +1,419 @@
+# ✍️ RAG + Prompt Engineering — توثيق الكود
+
+> نظام **RAG مع هندسة Prompts متقدمة** باستخدام `PromptTemplate` و `FewShotPromptTemplate`  
+> يُتيح التحكم الكامل في صياغة الـ Prompt المُرسَل للنموذج، مع دعم Chroma كقاعدة متجهات وOllama كنموذج تضمين محلي.
+
+---
+
+## 📋 جدول المحتويات
+
+1. [نظرة عامة](#نظرة-عامة)
+2. [المكونات الجديدة](#المكونات-الجديدة)
+3. [أنواع الـ Prompts](#أنواع-الـ-prompts)
+4. [إعداد المكونات](#إعداد-المكونات)
+5. [تكامل Prompt مع RAGSystem](#تكامل-prompt-مع-ragsystem)
+6. [تدفق التنفيذ](#تدفق-التنفيذ)
+7. [مقارنة Prompts](#مقارنة-prompts)
+8. [مقارنة مع الأكواد السابقة](#مقارنة-مع-الأكواد-السابقة)
+
+---
+
+## نظرة عامة
+
+يُضيف هذا الكود طبقة **هندسة الـ Prompt (Prompt Engineering)** فوق RAGSystem، مما يُتيح:
+
+```
+المستخدم يكتب Prompt مخصص
+         │
+         ▼
+  PromptTemplate / FewShotPromptTemplate
+         │
+         ▼ يُمرَّر إلى RAGSystem
+         │
+  rag.generate() → يملأ {context} و {question} تلقائياً
+         │
+         ▼
+     GeminiInterface (LLM)
+         │
+         ▼
+      الإجابة
+```
+
+---
+
+## المكونات الجديدة
+
+### مكونات مختلفة عن الأكواد السابقة
+
+| المكون | الأكواد السابقة | هذا الكود |
+|--------|----------------|-----------|
+| **قاعدة المتجهات** | `FAISSVectorDatabase` | `ChromaVectorDatabase` |
+| **نموذج التضمين** | `GeminiEmbedder` | `OllamaEmbedder` |
+| **الـ Prompt** | تلقائي داخل RAG | `PromptTemplate` / `FewShotPromptTemplate` مخصص |
+
+---
+
+### `ChromaVectorDatabase` — قاعدة Chroma
+
+```python
+from fennec.vector_database import ChromaVectorDatabase
+
+vector_db = ChromaVectorDatabase(embedder=embedder)
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **النوع** | قاعدة بيانات متجهات مُستمرة (Persistent) |
+| **الميزة الرئيسية** | تحفظ البيانات على القرص تلقائياً بين الجلسات |
+| **الفرق عن FAISS** | FAISS في الذاكرة فقط — Chroma تُثبَّت على القرص |
+| **الاستخدام المثالي** | التطبيقات التي تحتاج قاعدة معرفة دائمة |
+
+---
+
+### `OllamaEmbedder` — نموذج تضمين محلي
+
+```python
+from fennec.embeddings import OllamaEmbedder
+
+embedder = OllamaEmbedder()
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **النوع** | نموذج تضمين يعمل **محلياً** عبر Ollama |
+| **لا يحتاج** | API Key أو اتصال بالإنترنت |
+| **الفرق عن `GeminiEmbedder`** | Gemini → سحابي مدفوع ؛ Ollama → محلي مجاني |
+| **المتطلب** | تثبيت [Ollama](https://ollama.ai) وتحميل نموذج تضمين |
+
+---
+
+## أنواع الـ Prompts
+
+### النوع ① `PromptTemplate` — قالب عادي
+
+```python
+from fennec.prompt.core import PromptTemplate
+
+template_str = """أنت مساعد ذكاء اصطناعي متخصص في الإجابة عن الأسئلة التقنية.
+المعلومات المتاحة من قاعدة المعرفة:
+{context}
+السؤال: {question}
+تعليمات:
+- أجب بناءً على المعلومات المقدمة فقط
+- كن دقيقاً ومختصراً
+- إذا لم تجد معلومات كافية، قل "لا توجد معلومات كافية"
+- اجب بنفس لغة السؤال
+الإجابة:"""
+
+prompt = PromptTemplate(
+    template         = template_str,
+    input_variables  = ["context", "question"],
+    template_format  = "f-string"
+)
+```
+
+#### معاملات `PromptTemplate`
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `template` | نص الـ Prompt | يحتوي متغيرات بصيغة `{variable_name}` |
+| `input_variables` | `["context", "question"]` | أسماء المتغيرات المتوقعة في القالب |
+| `template_format` | `"f-string"` | صيغة استبدال المتغيرات (Python f-string) |
+
+#### المتغيرات في القالب
+
+| المتغير | من يملؤه | الوصف |
+|---------|---------|-------|
+| `{context}` | RAGSystem تلقائياً | القطع المسترجعة من قاعدة المعرفة |
+| `{question}` | RAGSystem تلقائياً | سؤال المستخدم |
+
+#### تعليمات الـ Prompt المضمّنة
+
+```
+① أجب بناءً على المعلومات المقدمة فقط      ← يمنع الهلوسة
+② كن دقيقاً ومختصراً                      ← يضبط أسلوب الإجابة
+③ إذا لم تجد معلومات كافية → قل ذلك       ← صدق عند عدم اليقين
+④ اجب بنفس لغة السؤال                     ← كشف تلقائي للغة
+```
+
+---
+
+### النوع ② `FewShotPromptTemplate` — قالب بأمثلة
+
+```python
+from fennec.prompt.core import FewShotPromptTemplate
+```
+
+يُضيف أمثلة حقيقية سؤال/جواب قبل السؤال الفعلي لتوجيه النموذج نحو أسلوب الإجابة المطلوب.
+
+#### قالب كل مثال
+
+```python
+example_template = PromptTemplate(
+    template        = "سؤال: {question}\nإجابة: {answer}",
+    input_variables = ["question", "answer"]
+)
+```
+
+#### الأمثلة التدريبية
+
+```python
+examples = [
+    {
+        "question": "ما هو RAG؟",
+        "answer"  : "RAG هو Retrieval-Augmented Generation، نظام يجمع..."
+    },
+    {
+        "question": "ما هي مميزات استخدام FAISS؟",
+        "answer"  : "FAISS سريع جداً في البحث، يدعم millions of vectors..."
+    },
+    {
+        "question": "ما الفرق بين chunking و embedding؟",
+        "answer"  : "Chunking هو تقسيم النص لقطع صغيرة..."
+    },
+]
+```
+
+#### بناء `FewShotPromptTemplate`
+
+```python
+few_shot = FewShotPromptTemplate(
+    examples          = examples,
+    example_prompt    = example_template,
+    prefix            = "أنت مساعد تقني. هذه أمثلة على إجابات جيدة:\n",
+    suffix            = "\n\nالمعلومات: {context}\n\nسؤال: {question}\nإجابة:",
+    input_variables   = ["context", "question"],
+    example_separator = "\n---\n",
+    max_examples      = 3
+)
+```
+
+#### معاملات `FewShotPromptTemplate`
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `examples` | قائمة الأمثلة | بيانات سؤال/جواب التدريبية |
+| `example_prompt` | `example_template` | القالب الذي يُطبَّق على كل مثال |
+| `prefix` | نص تعريفي | يُوضَع قبل الأمثلة |
+| `suffix` | نص ختامي | يحتوي `{context}` و`{question}` ويأتي بعد الأمثلة |
+| `input_variables` | `["context", "question"]` | المتغيرات المتوقعة في الـ suffix |
+| `example_separator` | `"\n---\n"` | فاصل بين كل مثال والآخر |
+| `max_examples` | `3` | الحد الأقصى للأمثلة المُدرجة |
+
+#### هيكل الـ Prompt المُولَّد
+
+```
+أنت مساعد تقني. هذه أمثلة على إجابات جيدة:
+
+سؤال: ما هو RAG؟
+إجابة: RAG هو Retrieval-Augmented Generation...
+---
+سؤال: ما هي مميزات استخدام FAISS؟
+إجابة: FAISS سريع جداً في البحث...
+---
+سؤال: ما الفرق بين chunking و embedding؟
+إجابة: Chunking هو تقسيم النص...
+
+المعلومات: {context}   ← تُملأ تلقائياً من قاعدة المعرفة
+
+سؤال: {question}       ← سؤال المستخدم الفعلي
+إجابة:
+```
+
+---
+
+## إعداد المكونات
+
+### `ContextConfig` — إعدادات السياق
+
+```python
+config = ContextConfig(
+    max_context_length = 3000,
+    include_scores     = False,
+    include_metadata   = False,
+    separator          = "\n---\n",
+    template           = "arabic"
+)
+```
+
+| المعامل | القيمة | الوصف | مقارنة بـ `main.py` |
+|---------|--------|-------|-------------------|
+| `max_context_length` | `3000` | الحد الأقصى للسياق | نفس القيمة |
+| `include_scores` | `False` | لا تُدرج درجات التشابه | كان `True` في main.py |
+| `include_metadata` | `False` | لا تُدرج بيانات المستندات | جديد |
+| `separator` | `"\n---\n"` | فاصل بين القطع في السياق | جديد |
+| `template` | `"arabic"` | قالب بناء السياق للعربية | كان `"english"` في main.py |
+
+---
+
+### `RAGConfig` — إعدادات النظام
+
+```python
+config = RAGConfig(
+    chunk_size            = 300,
+    overlap               = 50,
+    top_k                 = 4,
+    min_score             = 0.0,
+    enable_reranking      = True,
+    rerank_mode           = "heuristic",
+    rerank_top_k          = 3,
+    enable_prompt_routing = True,
+    include_few_shot      = True,
+    context_max_length    = 3000
+)
+```
+
+#### المعاملات الجديدة
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `chunk_size` | `300` | أصغر من `main.py` (كان 500) لدقة أعلى |
+| `rerank_top_k` | `3` | يُعيد ترتيب الـ top_k=4 ويُبقي أفضل 3 |
+| `include_few_shot` | `True` | تضمين أمثلة Few-Shot في الـ Prompt التلقائي |
+| `context_max_length` | `3000` | نفس `max_context_length` في ContextConfig |
+
+> **ملاحظة `enable_prompt_routing = True`:** هذا الإعداد يعمل فقط عند عدم وجود `prompt` مخصص. عند تمرير `prompt=prompt` لـ `RAGSystem`، يتجاهل النظام التوجيه التلقائي ويستخدم القالب المخصص.
+
+---
+
+## تكامل Prompt مع RAGSystem
+
+### تمرير Prompt عند الإنشاء
+
+```python
+rag = RAGSystem(
+    vector_db       = vector_db,
+    llm             = llm,
+    chunker         = chunker,
+    context_manager = manager,
+    config          = config,
+    prompt          = prompt          # ← PromptTemplate المخصص
+)
+```
+
+### تغيير الـ Prompt في وقت التشغيل
+
+```python
+# استخدام PromptTemplate العادي
+answer = rag.generate("ما هو RAG؟")
+
+# التبديل إلى FewShotPromptTemplate
+rag.set_prompt(few_shot)
+answer = rag.generate("اشرح Embedding بإيجاز")
+```
+
+> `set_prompt()` تُبدّل الـ Prompt فوراً دون إعادة بناء النظام — مفيدة لتجربة قوالب مختلفة في نفس الجلسة.
+
+---
+
+## تدفق التنفيذ
+
+### المرحلة ① — الإعداد
+
+```
+TextLoader("company_overview.txt")
+         │
+         ▼
+rag.add_documents()
+  ├── chunker.split() [chunk_size=300, overlap=50]
+  ├── OllamaEmbedder.embed()
+  └── ChromaVectorDatabase.store()
+```
+
+### المرحلة ② — الاستعلام بـ PromptTemplate
+
+```python
+for i, query in enumerate(queries, 1):
+    answer = rag.generate(
+        query           = query,
+        include_sources = True,
+        language        = None    # كشف تلقائي للغة
+    )
+```
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `include_sources` | `True` | تُدرج أسماء المستندات المصدرية في الإجابة |
+| `language` | `None` | `None` = كشف تلقائي للغة بدلاً من تحديدها يدوياً |
+
+```
+query
+  │
+  ├── ChromaVectorDatabase.search(top_k=4)
+  ├── rerank(top_k=3)                         ← يُبقي أفضل 3
+  ├── ContextManager.build()                  ← max=3000, template="arabic"
+  ├── PromptTemplate.format(context, question)← القالب المخصص
+  └── GeminiInterface.generate()
+```
+
+### المرحلة ③ — التبديل إلى FewShot
+
+```python
+rag.set_prompt(few_shot)
+answer = rag.generate("اشرح Embedding بإيجاز")
+```
+
+```
+query: "اشرح Embedding بإيجاز"
+  │
+  ├── [استرجاع وإعادة ترتيب — نفس المرحلة ②]
+  │
+  └── FewShotPromptTemplate.format(context, question)
+          │
+          ▼
+      prefix + 3 أمثلة مفصولة بـ "---" + suffix(context, question)
+          │
+          ▼
+      GeminiInterface.generate()
+```
+
+---
+
+## مقارنة Prompts
+
+### PromptTemplate العادي
+
+```
+✅ بسيط وسريع
+✅ يضمن عدم الخروج عن السياق
+✅ مناسب لأسئلة حقائق محددة
+❌ لا يوجّه النموذج نحو أسلوب معين
+```
+
+### FewShotPromptTemplate
+
+```
+✅ يُوجّه النموذج نحو أسلوب إجابة محدد
+✅ يحسّن جودة الإجابة في أسئلة التفسير
+✅ يقلل التباين في شكل الإجابات
+❌ يستهلك tokens إضافية (الأمثلة + السؤال)
+❌ يحتاج أمثلة جيدة ومتنوعة
+```
+
+### متى تستخدم كلاً منهما؟
+
+| الحالة | الاختيار |
+|--------|---------|
+| استعلامات حقائق مباشرة | `PromptTemplate` |
+| أسئلة تحتاج شرحاً أو مقارنة | `FewShotPromptTemplate` |
+| جمهور متنوع (أسلوب موحد مطلوب) | `FewShotPromptTemplate` |
+| تطبيقات سريعة الاستجابة | `PromptTemplate` |
+
+---
+
+
+
+## ملاحظات تقنية
+
+> **`template="arabic"` في ContextConfig:** يُهيئ قالب السياق لدعم النصوص العربية (اتجاه RTL وترتيب القطع المناسب).
+
+> **`include_scores=False`:** يجعل السياق المُقدَّم للـ Prompt أنظف بدون أرقام درجات التشابه، مما يُقلل التشتيت للنموذج.
+
+> **`rerank_top_k=3` مع `top_k=4`:** يسترجع 4 قطع أولاً ثم يعيد ترتيبها ويُبقي أفضل 3 فقط — يُحسّن الجودة بتكلفة بحث إضافية طفيفة.
+
+> **`language=None`:** يُفوّض للنموذج اكتشاف لغة السؤال تلقائياً، مما يجعل النظام أكثر مرونة مع أسئلة متعددة اللغات.
+
+> **`OllamaEmbedder` vs `GeminiEmbedder`:** Ollama يعمل محلياً بدون تكلفة API ويحافظ على خصوصية البيانات، لكنه يحتاج موارد حسابية محلية ويكون أبطأ من Gemini على الأجهزة المحدودة.
+
+---
+
