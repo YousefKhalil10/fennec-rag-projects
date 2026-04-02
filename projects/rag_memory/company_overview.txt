@@ -1,0 +1,79 @@
+Retrieval-Augmented Generation (RAG) is an AI framework that enhances large language
+models by combining them with external knowledge retrieval. Instead of relying solely
+on knowledge baked into model weights during training, RAG systems retrieve relevant
+documents from an external knowledge base at inference time, then pass those documents
+as context to the LLM along with the user's query.
+RAG was introduced in a 2020 paper by Lewis et al. at Meta AI. The architecture has
+three main phases: (1) Indexing — documents are split into chunks, converted into
+vector embeddings, and stored in a vector database; (2) Retrieval — at query time,
+the query is embedded and nearest neighbors are fetched from the vector store;
+(3) Generation — the retrieved chunks are injected into the LLM prompt alongside
+the question, and the model generates a grounded answer.
+Key advantages of RAG: it reduces hallucinations because answers are grounded in
+retrieved facts; it allows knowledge updates without retraining the model; it provides
+source citations; and it is cost-effective compared to fine-tuning for every new domain.
+Vector databases are specialized storage systems designed to hold and search
+high-dimensional embedding vectors efficiently. Unlike traditional databases that
+search by exact value match, vector databases perform similarity search — finding
+the k nearest vectors to a query vector using distance metrics such as cosine
+similarity, Euclidean distance (L2), or dot product.
+Popular vector databases include: FAISS (Facebook AI Similarity Search) — a
+highly optimized open-source library that runs in-process; Chroma — a simple
+embedded database popular in prototyping; Pinecone — a fully managed cloud service;
+Weaviate and Qdrant — production-ready open-source options with filtering support.
+FAISS supports several index types. The Flat index performs exact brute-force search
+and is accurate but slow for large datasets. The IVF (Inverted File) index clusters
+vectors and only searches nearby clusters, trading some accuracy for speed. HNSW
+(Hierarchical Navigable Small World) builds a graph structure enabling very fast
+approximate search and is often the best balance of speed and accuracy in practice.
+Choosing an index depends on dataset size, latency requirements, and whether
+approximate answers are acceptable. For datasets under one million vectors, Flat or
+HNSW are common choices.
+Embeddings are dense numerical representations of text (or other data) in a
+continuous vector space. Semantically similar texts map to nearby points in this
+space, enabling semantic search instead of keyword-only matching.
+Embedding models are trained to project text into a space where distance reflects
+meaning. Common models include: sentence-transformers (open-source, runs locally),
+OpenAI text-embedding-3-small and text-embedding-3-large (API-based, high quality),
+Google Gecko, and Cohere Embed.
+The dimensionality of embeddings varies. OpenAI's text-embedding-3-large produces
+3072-dimensional vectors. Sentence-Transformers' all-MiniLM-L6-v2 produces 384
+dimensions — compact and fast. Higher dimensionality can capture more nuance but
+requires more memory and compute.
+For multilingual or Arabic text, models like multilingual-e5-large or intfloat/e5-
+mistral-7b-instruct are preferred because they are explicitly trained on diverse
+language data. Embedding quality is critical to RAG performance: poor embeddings
+lead to low-quality retrieval regardless of how good the LLM is.
+Chunking is the process of dividing documents into smaller pieces before embedding
+and indexing. Chunk size and overlap are among the most impactful hyperparameters in
+a RAG pipeline.
+Common chunking strategies: (1) Fixed-size character chunking — split every N
+characters with optional overlap. Simple but can break sentences mid-way. (2)
+Recursive character splitting — tries to split on natural boundaries like paragraphs,
+then sentences, then words, then characters. Produces more coherent chunks.
+(3) Semantic chunking — uses sentence embeddings to group semantically related
+sentences into the same chunk, maximizing coherence at the cost of variable chunk sizes.
+(4) Token-based splitting — splits by token count, which matches LLM context windows
+precisely.
+Chunk size trade-offs: small chunks (100-200 tokens) give precise retrieval but may
+lack context; large chunks (800-1500 tokens) provide more context but dilute the
+signal. Chunk overlap (typically 10-20% of chunk size) preserves continuity across
+boundaries. A common starting point is chunk_size=500, overlap=100.
+Hallucination in large language models refers to the generation of content that is
+factually incorrect, ungrounded, or fabricated — yet stated with confidence. LLMs
+hallucinate because they generate text based on statistical patterns learned from
+training data, not by accessing verified facts.
+
+Types of hallucinations: (1) Factual hallucination — stating incorrect facts (e.g.,
+wrong dates, people, statistics); (2) Context hallucination — generating information
+not supported by the provided context; (3) Source hallucination — citing non-existent
+papers, URLs, or references.
+
+RAG significantly reduces hallucinations because the model's answer is anchored to
+retrieved passages. However, RAG does not eliminate hallucinations completely —
+models can still ignore retrieved context or misinterpret it.
+
+Mitigation strategies: faithfulness scoring (measuring how much the answer is
+supported by context), confidence thresholding, self-consistency checks, and
+HallucinationGuard systems that flag suspect responses. In production, monitoring
+hallucination rate as a key metric is essential for maintaining answer quality.

@@ -1,0 +1,463 @@
+# 🔌 RAG Plugin System — توثيق الكود
+
+> نظام **إضافات (Plugins) قابل للتوسعة** فوق RAGSystem  
+> يُنظّم معالجة الاستعلامات عبر **pipeline** مكوّن من 3 إضافات متسلسلة: تنظيف → استرجاع وتوليد → تدقيق.
+
+---
+
+## 📋 جدول المحتويات
+
+1. [نظرة عامة على النمط المعماري](#نظرة-عامة-على-النمط-المعماري)
+2. [مكونات نظام الإضافات](#مكونات-نظام-الإضافات)
+3. [الإضافات الثلاث](#الإضافات-الثلاث)
+4. [الإعداد والتسجيل](#الإعداد-والتسجيل)
+5. [تدفق الـ Pipeline](#تدفق-الـ-pipeline)
+6. [الإحصائيات](#الإحصائيات)
+7. [دورة حياة الإضافة](#دورة-حياة-الإضافة)
+8. [مقارنة مع الأكواد السابقة](#مقارنة-مع-الأكواد-السابقة)
+
+---
+
+## نظرة عامة على النمط المعماري
+
+يعتمد هذا الكود على نمط **Plugin Pipeline** حيث يمر الاستعلام عبر سلسلة مرتّبة من الإضافات:
+
+```
+الاستعلام الخام
+      │
+      ▼
+┌─────────────────┐
+│ QueryCleaner    │  ① تنظيف النص وتوحيد علامات الترقيم
+│    Plugin       │
+└────────┬────────┘
+         │  استعلام نظيف
+         ▼
+┌─────────────────┐
+│  RAGQuery       │  ② استرجاع المستندات + توليد الإجابة
+│    Plugin       │
+└────────┬────────┘
+         │  dict {query, answer, num_sources, top_score}
+         ▼
+┌─────────────────┐
+│ AnswerValidator │  ③ تدقيق الإجابة + حساب الثقة
+│    Plugin       │
+└────────┬────────┘
+         │  dict {+ is_valid, word_count, confidence}
+         ▼
+     النتيجة النهائية
+```
+
+---
+
+## مكونات نظام الإضافات
+
+```python
+from fennec.plugins import (
+    Plugin,
+    PluginManager,
+    PluginConfig,
+    PluginMetadata,
+    PluginStatus,
+    PluginPriority,
+    PermissionType,
+)
+```
+
+### `Plugin` — الكلاس الأساسي
+
+الكلاس الأب الذي ترثه جميع الإضافات. يُلزم بتنفيذ ثلاث دوال:
+
+| الدالة | النوع | الوصف |
+|--------|-------|-------|
+| `initialize()` | `async → bool` | تهيئة الإضافة وتغيير حالتها إلى `ENABLED` |
+| `execute(**kwargs)` | `async → Any` | المنطق الأساسي للإضافة |
+| `cleanup()` | `async` | تنظيف الموارد وتغيير الحالة إلى `DISABLED` |
+
+> **`safe_execute()`** — دالة موروثة من `Plugin` تُشغّل `execute()` داخل try/catch وتُسجّل الإحصائيات تلقائياً.
+
+---
+
+### `PluginMetadata` — بيانات الإضافة
+
+```python
+PluginMetadata(
+    name        = "query_cleaner",
+    version     = "1.0.0",           # صيغة SemVer مطلوبة
+    author      = "fennec-rag",
+    description = "تنظيف الاستعلام",
+    permissions = [PermissionType.FILE_READ.value],
+)
+```
+
+| الحقل | الوصف |
+|-------|-------|
+| `name` | معرّف فريد للإضافة (يُستخدم في التسجيل والصلاحيات) |
+| `version` | إصدار الإضافة بصيغة `X.Y.Z` |
+| `author` | اسم المطوّر |
+| `description` | وصف قصير للإضافة |
+| `permissions` | قائمة الصلاحيات المطلوبة (`.value` لاستخراج القيمة النصية) |
+
+---
+
+### `PluginConfig` — إعدادات التشغيل
+
+```python
+cfg = PluginConfig(
+    enabled     = True,
+    timeout     = 15.0,   # ثانية
+    max_retries = 1,
+)
+```
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `enabled` | `True` | هل الإضافة مُفعَّلة؟ |
+| `timeout` | `15.0s` | الحد الأقصى لوقت التنفيذ قبل الإلغاء |
+| `max_retries` | `1` | عدد مرات إعادة المحاولة عند الفشل |
+
+---
+
+### `PluginStatus` — حالات الإضافة
+
+| الحالة | الوصف |
+|--------|-------|
+| `ENABLED` | الإضافة نشطة وجاهزة للتنفيذ |
+| `DISABLED` | الإضافة مُعطَّلة (بعد `cleanup()`) |
+
+---
+
+### `PermissionType` — أنواع الصلاحيات
+
+| الصلاحية | الإضافات التي تستخدمها | الوصف |
+|---------|----------------------|-------|
+| `FILE_READ` | جميع الإضافات الثلاث | قراءة الملفات |
+| `FILE_WRITE` | `rag_executor` فقط | كتابة الملفات (لحفظ النتائج) |
+
+> يجب استدعاء `manager.grant_all_permissions(plugin.name)` **قبل** `register_plugin()`.
+
+---
+
+### `PluginManager` — مدير الإضافات
+
+```python
+manager = PluginManager(
+    plugins_dir    = "./plugins_dir",
+    safe_mode      = False,
+    system_version = "1.0.0",
+    auto_discover  = False,
+)
+```
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `plugins_dir` | `"./plugins_dir"` | مجلد الإضافات الخارجية |
+| `safe_mode` | `False` | تعطيل قيود الأمان الإضافية |
+| `system_version` | `"1.0.0"` | إصدار النظام للتحقق من التوافق |
+| `auto_discover` | `False` | عدم البحث التلقائي عن إضافات في المجلد |
+
+---
+
+## الإضافات الثلاث
+
+### 1. `QueryCleanerPlugin` — منظّف الاستعلام
+
+```python
+class QueryCleanerPlugin(Plugin):
+    async def execute(self, query: str = "") -> str:
+        import re
+        clean = re.sub(r"\s+", " ", query).strip()      # توحيد المسافات
+        clean = re.sub(r"[؟?!]+$", "؟", clean)          # توحيد الاستفهام
+        return clean
+```
+
+**المدخل:** `query: str` — الاستعلام الخام  
+**المخرج:** `str` — الاستعلام بعد التنظيف
+
+#### عمليات التنظيف
+
+| العملية | النمط | المثال |
+|---------|-------|--------|
+| توحيد المسافات | `\s+` → `" "` | `"ما  هو  RAG"` → `"ما هو RAG"` |
+| إزالة الحواف | `.strip()` | `"  نص  "` → `"نص"` |
+| توحيد الاستفهام | `[؟?!]+$` → `"؟"` | `"ما هو؟؟؟"` → `"ما هو؟"` |
+
+#### الصلاحيات المطلوبة
+```
+FILE_READ
+```
+
+---
+
+### 2. `RAGQueryPlugin` — منفّذ الاستعلام
+
+```python
+class RAGQueryPlugin(Plugin):
+    def __init__(self, metadata, config, rag_system):
+        super().__init__(metadata, config)
+        self._rag = rag_system          # حقن التبعية
+
+    async def execute(self, query: str = "") -> dict:
+        retrieved = self._rag.retrieve(query)
+        answer    = self._rag.generate(query)
+        return {
+            "query"      : query,
+            "answer"     : answer,
+            "num_sources": len(retrieved),
+            "top_score"  : retrieved[0][1] if retrieved else 0.0,
+        }
+```
+
+**المدخل:** `query: str` — الاستعلام النظيف  
+**المخرج:** `dict` بأربعة حقول:
+
+| الحقل | النوع | الوصف |
+|-------|-------|-------|
+| `query` | `str` | الاستعلام بعد التنظيف |
+| `answer` | `str` | الإجابة المولّدة من LLM |
+| `num_sources` | `int` | عدد القطع المُسترجعة |
+| `top_score` | `float` | أعلى درجة تشابه (0.0 إذا لم يُسترجع شيء) |
+
+> **ملاحظة:** يستخدم **حقن التبعية (Dependency Injection)** لتمرير `rag_system` عبر `__init__` بدلاً من إنشائه داخل الإضافة، مما يجعلها قابلة للاختبار والتبديل.
+
+#### الصلاحيات المطلوبة
+```
+FILE_READ, FILE_WRITE
+```
+
+---
+
+### 3. `AnswerValidatorPlugin` — مدقّق الإجابة
+
+```python
+class AnswerValidatorPlugin(Plugin):
+    async def execute(self, result: dict = None) -> dict:
+        if result is None:
+            return {"valid": False, "reason": "no result"}
+
+        answer   = result.get("answer", "")
+        is_valid = len(answer) > 20 and result.get("num_sources", 0) > 0
+
+        result["is_valid"]   = is_valid
+        result["word_count"] = len(answer.split())
+        result["confidence"] = min(result.get("top_score", 0) * 1.2, 1.0)
+        return result
+```
+
+**المدخل:** `result: dict` — مخرجات `RAGQueryPlugin`  
+**المخرج:** `dict` مُحدَّث بثلاثة حقول إضافية:
+
+| الحقل المُضاف | النوع | منطق الحساب |
+|--------------|-------|------------|
+| `is_valid` | `bool` | `len(answer) > 20` **و** `num_sources > 0` |
+| `word_count` | `int` | `len(answer.split())` |
+| `confidence` | `float` | `min(top_score × 1.2, 1.0)` — مُقيَّد بين 0 و1 |
+
+#### معادلة الثقة
+
+```
+confidence = min(top_score × 1.2, 1.0)
+```
+
+تضرب درجة التشابه في 1.2 لتعطي هامشاً إضافياً، مع تقييد النتيجة بـ 1.0 حتى لا تتجاوز 100%.
+
+| `top_score` | `confidence` |
+|-------------|-------------|
+| 0.0 | 0.00 |
+| 0.5 | 0.60 |
+| 0.8 | 0.96 |
+| 0.9 | 1.00 (مُقيَّد) |
+
+#### شرط الصحة
+
+```
+is_valid = True  إذا:
+    ① طول الإجابة > 20 حرفاً (ليست فارغة أو قصيرة جداً)
+    ② عدد المصادر > 0  (مدعومة بمستند فعلي)
+```
+
+#### الصلاحيات المطلوبة
+```
+FILE_READ
+```
+
+---
+
+## الإعداد والتسجيل
+
+### تسلسل الإعداد الصحيح
+
+```python
+# ① إنشاء الإضافات
+cfg = PluginConfig(enabled=True, timeout=15.0, max_retries=1)
+
+cleaner_plugin   = QueryCleanerPlugin(metadata_1, cfg)
+rag_plugin       = RAGQueryPlugin(metadata_2, cfg, base_rag)   # حقن RAG
+validator_plugin = AnswerValidatorPlugin(metadata_3, cfg)
+
+# ② إنشاء المدير
+manager = PluginManager(
+    plugins_dir    = "./plugins_dir",
+    safe_mode      = False,
+    system_version = "1.0.0",
+    auto_discover  = False,
+)
+
+# ③ منح الصلاحيات (يجب قبل register!)
+for plugin in [cleaner_plugin, rag_plugin, validator_plugin]:
+    manager.grant_all_permissions(plugin.name)
+
+# ④ تسجيل الإضافات (يستدعي initialize() داخلياً)
+for plugin in [cleaner_plugin, rag_plugin, validator_plugin]:
+    await manager.register_plugin(plugin)
+```
+
+> ⚠️ **الترتيب مهم:** `grant_all_permissions` **لازم** يجي قبل `register_plugin`، وإلا سيفشل التسجيل بسبب نقص الصلاحيات.
+
+---
+
+## تدفق الـ Pipeline
+
+```python
+for raw_q in raw_queries:
+    # ① تنظيف الاستعلام
+    clean_q    = await cleaner_plugin.safe_execute(query=raw_q)
+
+    # ② تنفيذ RAG
+    rag_result = await rag_plugin.safe_execute(query=clean_q)
+
+    # ③ تدقيق الإجابة
+    validated  = await validator_plugin.safe_execute(result=rag_result)
+```
+
+### مثال على مرور استعلام عبر الـ Pipeline
+
+```
+الدخل: "  ما هو الـ RAG   ؟؟؟ "
+            │
+            ▼ QueryCleaner
+        "ما هو الـ RAG؟"
+            │
+            ▼ RAGQueryPlugin
+        {
+          "query"      : "ما هو الـ RAG؟",
+          "answer"     : "RAG هو نظام...",
+          "num_sources": 3,
+          "top_score"  : 0.82
+        }
+            │
+            ▼ AnswerValidatorPlugin
+        {
+          "query"      : "ما هو الـ RAG؟",
+          "answer"     : "RAG هو نظام...",
+          "num_sources": 3,
+          "top_score"  : 0.82,
+          "is_valid"   : True,
+          "word_count" : 45,
+          "confidence" : 0.98
+        }
+```
+
+### `safe_execute()` مقابل `execute()`
+
+| الدالة | الوصف |
+|--------|-------|
+| `execute()` | تنفّذ المنطق الأساسي مباشرةً، لا تعالج الاستثناءات |
+| `safe_execute()` | تُغلّف `execute()` بـ try/catch، تُسجّل الإحصائيات، تُطبّق `timeout` |
+
+> يُفضَّل دائماً استخدام `safe_execute()` في الإنتاج.
+
+---
+
+## الإحصائيات
+
+```python
+for plugin in [cleaner_plugin, rag_plugin, validator_plugin]:
+    s = plugin.get_stats()
+    print(
+        f"📊 {plugin.name}: "
+        f"executions={s['execution_stats']['total_executions']}, "
+        f"success={s['execution_stats']['success_rate']}, "
+        f"avg={s['timing_stats']['average_time']}"
+    )
+```
+
+### هيكل `get_stats()`
+
+```python
+{
+    "execution_stats": {
+        "total_executions": int,    # إجمالي مرات التنفيذ
+        "success_rate"    : float,  # نسبة النجاح (0.0 – 1.0)
+        "failure_count"   : int,    # عدد الفشل
+    },
+    "timing_stats": {
+        "average_time": float,      # متوسط وقت التنفيذ (ثانية)
+        "min_time"    : float,      # أسرع تنفيذ
+        "max_time"    : float,      # أبطأ تنفيذ
+    }
+}
+```
+
+---
+
+## دورة حياة الإضافة
+
+```
+الإنشاء (Plugin.__init__)
+        │
+        ▼
+   grant_permissions         ← manager.grant_all_permissions()
+        │
+        ▼
+   register_plugin()         ← يستدعي initialize() داخلياً
+        │
+        ▼
+   الحالة: ENABLED
+        │
+        ├──► safe_execute()  ← يُكرَّر لكل استعلام
+        │        │
+        │        ├── execute()  (المنطق الأساسي)
+        │        └── تسجيل الإحصائيات
+        │
+        ▼
+   cleanup()                 ← في النهاية
+        │
+        ▼
+   الحالة: DISABLED
+```
+
+---
+
+## الاستعلامات التجريبية
+
+```python
+raw_queries = [
+    "  ما هو الـ RAG   ؟؟؟ ",
+    "كيف يعمل تعلم الآلة !!! ",
+    "ما هي النماذج اللغوية الكبيرة؟",
+]
+```
+
+### مثال على مخرجات كل استعلام
+
+```
+━━━ استعلام: 'ما هو الـ RAG   ؟؟؟' ━━━
+  [Cleaner]   : 'ما هو الـ RAG؟'
+  [RAG]       : sources=3, score=0.823
+  [Validator] : valid=True, words=47, conf=0.99
+```
+
+---
+
+
+## ملاحظات تقنية
+
+> **`async/await`:** جميع دوال الإضافات غير متزامنة (`async`). هذا يعني أن الكود يعمل داخل **event loop** — إما في Jupyter مباشرةً، أو يحتاج `asyncio.run(main())` في السكريبتات العادية.
+
+> **Dependency Injection في `RAGQueryPlugin`:** تمرير `rag_system` عبر `__init__` بدلاً من إنشائه داخل الإضافة يُطبّق مبدأ **Inversion of Control** ويُسهّل استبدال النظام أو اختباره.
+
+> **`min(top_score × 1.2, 1.0)`:** استخدام `min()` ضروري لأن `top_score` قد يكون 0.9 فتصبح النتيجة 1.08 بدونه، وهو خارج النطاق المنطقي للثقة.
+
+> **`safe_execute()` vs `execute()`:** في Pipeline الإنتاج، `safe_execute()` هي الاختيار الآمن لأنها تضمن عدم تعطّل الـ Pipeline بأكمله بسبب استثناء في إضافة واحدة.
+
+---

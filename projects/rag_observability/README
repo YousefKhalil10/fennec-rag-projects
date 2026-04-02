@@ -1,0 +1,613 @@
+# 📡 RAG + Observability + Live Chat Dashboard — توثيق الكود
+
+> نظام **RAG متكامل مع مراقبة متقدمة ولوحة تحكم حية**  
+> يجمع بين الاسترجاع والتوليد والبث المباشر (Streaming) مع رصد الأداء واكتشاف الشذوذات في الوقت الفعلي.
+
+---
+
+## 📋 جدول المحتويات
+
+1. [نظرة عامة على المعمارية](#نظرة-عامة-على-المعمارية)
+2. [المكونات والاستيرادات](#المكونات-والاستيرادات)
+3. [الإعداد الأساسي](#الإعداد-الأساسي)
+4. [كلاس `RAGObservabilityWrapper`](#كلاس-ragobservabilitywrapper)
+5. [دوال البناء](#دوال-البناء)
+6. [نظام التنبيهات](#نظام-التنبيهات)
+7. [حلقة الطلبات `run_query_loop`](#حلقة-الطلبات-run_query_loop)
+8. [الإحصائيات النهائية](#الإحصائيات-النهائية)
+9. [الدالة الرئيسية `main`](#الدالة-الرئيسية-main)
+10. [دعم Jupyter](#دعم-jupyter)
+11. [جدول كل المقاييس](#جدول-كل-المقاييس)
+
+---
+
+## نظرة عامة على المعمارية
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        RAGObservabilityWrapper                   │
+│                                                                  │
+│   ┌─────────────┐    ┌──────────────────┐    ┌──────────────┐   │
+│   │  RAGSystem  │    │ ObservabilitySystem│   │ConversationLogger│
+│   │  (Core RAG) │    │  (Metrics+Alerts) │   │ (Live Chat)  │   │
+│   └──────┬──────┘    └────────┬─────────┘    └──────┬───────┘   │
+│          │                    │                      │           │
+│          ▼                    ▼                      ▼           │
+│   retrieve() / generate()  record()           log()             │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │   DashboardExporter    │
+                    │  http://localhost:8888 │
+                    │  - مقاييس الأداء       │
+                    │  - التنبيهات          │
+                    │  - 💬 Live Chat       │
+                    └───────────────────────┘
+```
+
+النظام مبني على **3 طبقات**:
+
+| الطبقة | المكون | الوظيفة |
+|--------|--------|---------|
+| **Core** | `RAGSystem` | الاسترجاع والتوليد |
+| **Observability** | `ObservabilitySystem` | رصد الأداء والتنبيهات |
+| **Presentation** | `DashboardExporter` + `ConversationLogger` | عرض البيانات حياً |
+
+---
+
+## المكونات والاستيرادات
+
+### مكونات RAG الأساسية
+
+```python
+from fennec.document_loaders import TextLoader
+from fennec.llm import GeminiInterface
+from fennec.embeddings import GeminiEmbedder
+from fennec.chunks import MultilanguageTextChunker
+from fennec.vector_database import FAISSVectorDatabase
+from fennec.context import ContextManager
+from fennec.rag.core import RAGSystem, RAGConfig
+```
+
+
+---
+
+### مكونات Streaming
+
+```python
+from fennec.rag.streaming_rag import StreamingRAG, StreamConfig, EventType
+```
+
+| المكون | الوصف |
+|--------|-------|
+| `StreamingRAG` | يُشغّل RAG بأسلوب البث المتدفق (token-by-token) |
+| `StreamConfig` | إعدادات البث (حجم الرقاقة، التأخير، عدد المستندات) |
+| `EventType` | أنواع الأحداث أثناء البث (`RETRIEVAL_START`, `CHUNK`, `ERROR`…) |
+
+---
+
+### مكونات Observability
+
+```python
+from fennec.observability import (
+    ObservabilityConfig,
+    ObservabilitySystem,
+    AnomalyConfig,
+    MetricType,
+    DashboardExporter,
+)
+from fennec.observability.dashboard import ConversationLogger
+```
+
+| المكون | الوصف |
+|--------|-------|
+| `ObservabilitySystem` | النظام المركزي لجمع المقاييس وإطلاق التنبيهات |
+| `ObservabilityConfig` | إعدادات البيئة ونافذة الزمن والتنبيهات |
+| `AnomalyConfig` | إعدادات كاشف الشذوذات |
+| `MetricType` | نوع المقياس: `GAUGE`, `COUNTER`, `TIMER`, `HISTOGRAM` |
+| `DashboardExporter` | يُشغّل خادم ويب على منفذ محدد لعرض البيانات |
+| `ConversationLogger` | يُسجّل المحادثات لعرضها في تبويب Live Chat |
+
+---
+
+## الإعداد الأساسي
+
+### إعداد الـ Logging
+
+```python
+logging.basicConfig(
+    level   = logging.WARNING,
+    format  = "%(asctime)s | %(levelname)-7s | %(name)s — %(message)s",
+)
+```
+
+> يُظهر فقط التحذيرات والأخطاء لتجنب إغراق الـ output بالرسائل التشخيصية.
+
+---
+
+### إعداد المكونات الأولية
+
+```python
+llm     = GeminiInterface(api_key=api)
+embedder = GeminiEmbedder(api_key=api)
+chunker  = MultilanguageTextChunker(chunk_size=200, overlap=50)
+vd       = FAISSVectorDatabase(embedder=embedder)
+context  = ContextManager()
+```
+
+| المكون | الإعداد الخاص | الملاحظة |
+|--------|--------------|---------|
+| `chunker` | `chunk_size=200, overlap=50` | قطع أصغر من الافتراضي (500) لاسترجاع أدق |
+| بقية المكونات | افتراضي | تُمرَّر لـ `build_rag()` لاحقاً |
+
+---
+
+### بيانات الديمو
+
+```python
+DEMO_QUERIES = [
+    "ما هو التعلم الآلي؟",
+    "كيف يعمل التعلم العميق؟",
+    "ما هو RAG وكيف يعمل؟",
+    "ما الفرق بين قواعد البيانات المتجهية والعادية؟",
+    "ما هي التضمينات وكيف تؤثر على RAG؟",
+    "كيف يتم رصد أداء أنظمة الذكاء الاصطناعي؟",
+]
+
+_SESSIONS = ["user-alpha", "user-beta", "user-gamma", "user-delta"]
+```
+
+تُحاكي `_SESSIONS` أربعة مستخدمين مختلفين يُرسلون طلبات متزامنة.
+
+---
+
+## كلاس `RAGObservabilityWrapper`
+
+```python
+class RAGObservabilityWrapper:
+    def __init__(self, rag, obs, conv_logger): ...
+```
+
+### الغرض
+
+**Wrapper Pattern** — يلتف حول `RAGSystem` دون تعديله، ويُضيف:
+- تسجيل المقاييس تلقائياً عند كل عملية
+- تسجيل المحادثات في `ConversationLogger`
+
+### الخصائص
+
+| الخاصية | النوع | الوصف |
+|---------|-------|-------|
+| `self.rag` | `RAGSystem` | النظام الأساسي |
+| `self.obs` | `ObservabilitySystem` | نظام المراقبة |
+| `self.conv_logger` | `ConversationLogger` | مسجّل المحادثات |
+
+---
+
+### `_rec()` — مساعد تسجيل المقاييس
+
+```python
+def _rec(self, name, value, mtype=MetricType.GAUGE, tags=None) -> None:
+    self.obs.record(name, value, mtype, tags or {})
+```
+
+دالة داخلية مختصرة تُغلّف `obs.record()` لتقليل التكرار.
+
+| المعامل | الوصف |
+|---------|-------|
+| `name` | اسم المقياس (نمط نقطي: `rag.retrieval_latency_ms`) |
+| `value` | القيمة العددية |
+| `mtype` | نوع المقياس (افتراضي: `GAUGE`) |
+| `tags` | وسوم إضافية للتصفية (مثل: `{"session": "user-alpha"}`) |
+
+---
+
+### `add_documents()` — فهرسة المستندات
+
+```python
+def add_documents(self, docs) -> Dict[str, int]:
+    t0     = time.perf_counter()
+    result = self.rag.add_documents(docs)
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+
+    self._rec("rag.indexing_latency_ms",  elapsed_ms,          MetricType.TIMER)
+    self._rec("rag.indexed_chunks_count", sum(result.values()), MetricType.COUNTER)
+    return result
+```
+
+| المقياس المُسجَّل | النوع | الوصف |
+|-----------------|-------|-------|
+| `rag.indexing_latency_ms` | TIMER | زمن فهرسة المستندات كاملاً |
+| `rag.indexed_chunks_count` | COUNTER | إجمالي القطع المُفهرَسة |
+
+---
+
+### `retrieve()` — الاسترجاع المُراقَب
+
+```python
+def retrieve(self, query, top_k=3) -> List[Tuple]:
+```
+
+| المقياس المُسجَّل | النوع | الوصف |
+|-----------------|-------|-------|
+| `rag.retrieval_latency_ms` | TIMER | زمن الاسترجاع |
+| `rag.retrieved_docs_count` | GAUGE | عدد القطع المُسترجعة |
+| `rag.avg_similarity_score` | GAUGE | متوسط درجات التشابه |
+
+---
+
+### `query()` — الاستعلام الكامل
+
+```python
+def query(self, query, session_id="default", tags=None) -> str:
+```
+
+يُنفّذ دورة RAG كاملة مع تسجيل مقياس لكل مرحلة:
+
+```
+query()
+  │
+  ├── [COUNTER] rag.query_count += 1
+  │
+  ├── ① مرحلة الاسترجاع
+  │     ├── [TIMER]   rag.retrieval_latency_ms
+  │     ├── [GAUGE]   rag.retrieved_docs_count
+  │     └── [GAUGE]   rag.avg_similarity_score
+  │
+  ├── ② مرحلة التوليد
+  │     ├── [TIMER]   rag.generation_latency_ms
+  │     └── [GAUGE]   rag.answer_length_chars
+  │
+  ├── [TIMER]   rag.total_latency_ms
+  │
+  ├── conv_logger.log(session_id, query, answer, latency_ms, sources_count)
+  │
+  └── return answer
+      (عند الخطأ: [COUNTER] rag.error_count += 1)
+```
+
+**معاملات `conv_logger.log()`:**
+
+| المعامل | الوصف |
+|---------|-------|
+| `session_id` | معرف الجلسة (المستخدم) |
+| `query` | السؤال الأصلي |
+| `answer` | الإجابة المولّدة |
+| `latency_ms` | الزمن الكلي للاستعلام |
+| `sources_count` | عدد المستندات المُستخدمة |
+
+---
+
+### `stream_query()` — البث المُراقَب
+
+```python
+def stream_query(self, streaming_rag, query, session_id="default", print_tokens=True) -> str:
+```
+
+يُشغّل RAG بأسلوب **البث المتدفق** ويُعالج الأحداث واحداً واحداً:
+
+```
+stream_events(query)
+  │
+  ├── EventType.RETRIEVAL_START  → يبدأ مؤقت الاسترجاع
+  │
+  ├── EventType.RETRIEVAL_DONE   → [TIMER]   rag.retrieval_latency_ms
+  │                                [GAUGE]   rag.retrieved_docs_count
+  │                                يطبع: "📂 استُرجع N مستندات (Xms)"
+  │
+  ├── EventType.CHUNK             → يُضيف الرمز للمخزن المؤقت
+  │                                يطبع الرمز مباشرةً (streaming effect)
+  │
+  ├── EventType.GENERATION_DONE  → [TIMER]   rag.generation_latency_ms
+  │
+  └── EventType.ERROR             → [COUNTER] rag.error_count += 1
+                                   يطبع: "❌ خطأ: ..."
+
+بعد انتهاء البث:
+  ├── [TIMER]   rag.total_latency_ms
+  ├── [GAUGE]   rag.answer_length_chars
+  ├── [COUNTER] rag.query_count += 1
+  ├── conv_logger.log(...)
+  └── يطبع: "⏱ الزمن الكلي: Xms"
+```
+
+---
+
+## دوال البناء
+
+### `build_rag()` — بناء RAGSystem
+
+```python
+def build_rag() -> RAGSystem:
+    return RAGSystem(
+        vector_db       = vd,
+        llm             = llm,
+        chunker         = chunker,
+        context_manager = context,
+        config          = RAGConfig(
+            top_k                 = 3,
+            min_score             = 0.0,
+            enable_reranking      = False,
+            enable_prompt_routing = False,
+        ),
+    )
+```
+
+| الإعداد | القيمة | السبب |
+|---------|--------|-------|
+| `top_k` | `3` | استرجاع 3 قطع لكل سؤال |
+| `min_score` | `0.0` | لا تصفية بالدرجة الدنيا (الـ `low_similarity` alert يتكفّل بذلك) |
+| `enable_reranking` | `False` | أسرع للتجربة |
+| `enable_prompt_routing` | `False` | Prompt موحّد لجميع الأسئلة |
+
+---
+
+### `build_observability()` — بناء نظام المراقبة
+
+```python
+def build_observability() -> ObservabilitySystem:
+    obs = ObservabilitySystem(
+        config=ObservabilityConfig(
+            environment            = "development",
+            window_seconds         = 120.0,
+            alert_cooldown_seconds = 15,
+            anomaly                = AnomalyConfig(
+                enabled          = True,
+                algorithm        = "zscore",
+                zscore_threshold = 2.5,
+                min_samples      = 5,
+                window_seconds   = 120.0,
+            ),
+        )
+    )
+```
+
+#### `ObservabilityConfig`
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `environment` | `"development"` | بيئة التشغيل |
+| `window_seconds` | `120.0` | نافذة الزمن لحساب الإحصائيات (دقيقتان) |
+| `alert_cooldown_seconds` | `15` | الحد الأدنى بين تنبيهين متتاليين لنفس القاعدة |
+
+#### `AnomalyConfig` — كاشف الشذوذات
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `enabled` | `True` | تفعيل الكشف عن الشذوذات |
+| `algorithm` | `"zscore"` | خوارزمية الانحراف المعياري |
+| `zscore_threshold` | `2.5` | القيمة التي فوقها تُعدّ قيمة شاذة (2.5σ) |
+| `min_samples` | `5` | الحد الأدنى من العينات قبل بدء الكشف |
+| `window_seconds` | `120.0` | نافذة الزمن للكشف |
+
+> **Z-Score Algorithm:** تُحسب `z = (x - μ) / σ`، فإذا تجاوز `|z|` العتبة (2.5) تُعلن الشذوذ.
+
+---
+
+## نظام التنبيهات
+
+أربعة قواعد تنبيه مُعرَّفة:
+
+```python
+obs.add_alert_rule(
+    rule_id     = "...",
+    metric_name = "...",
+    condition   = lambda v: ...,
+    message     = "...",
+    severity    = "warning" | "critical",
+)
+```
+
+| `rule_id` | المقياس المُراقَب | الشرط | الخطورة | الرسالة |
+|-----------|-----------------|-------|---------|---------|
+| `slow_retrieval` | `rag.retrieval_latency_ms` | `> 500ms` | `warning` | زمن الاسترجاع تجاوز 500ms |
+| `very_slow_total` | `rag.total_latency_ms` | `> 3000ms` | `critical` | الزمن الكلي تجاوز 3 ثوانٍ |
+| `no_docs_retrieved` | `rag.retrieved_docs_count` | `< 1` | `critical` | لم يُسترجَع أي مستند |
+| `low_similarity` | `rag.avg_similarity_score` | `< 0.3` | `warning` | درجة التشابه منخفضة جداً |
+
+---
+
+## حلقة الطلبات `run_query_loop`
+
+```python
+def run_query_loop(
+    wrapper,
+    streaming_rag,
+    iterations   = 20,
+    delay_range  = (0.5, 2.0),
+) -> None:
+```
+
+### السلوك
+
+- تُشغّل `iterations` طلباً
+- كل طلب: سؤال عشوائي من `DEMO_QUERIES` + جلسة عشوائية من `_SESSIONS`
+- **كل طلب ثالث** (`i % 3 == 0`) يُشغَّل كـ **Stream**، والباقي عادي
+- تأخير عشوائي بين الطلبات من `delay_range`
+
+```
+for i in range(iterations):
+    query      = random.choice(DEMO_QUERIES)
+    session_id = random.choice(_SESSIONS)
+
+    if i % 3 == 0:
+        wrapper.stream_query(...)   # 🌊 Streaming
+    else:
+        wrapper.query(...)          # 📝 Normal
+    
+    time.sleep(random.uniform(*delay_range))
+```
+
+### المعاملات
+
+| المعامل | القيمة في main | الوصف |
+|---------|--------------|-------|
+| `iterations` | `25` | عدد الطلبات |
+| `delay_range` | `(0.3, 1.2)` | تأخير عشوائي بين الطلبات بالثانية |
+
+---
+
+## الإحصائيات النهائية
+
+### `print_final_stats(obs, conv_logger)`
+
+تطبع ملخصاً شاملاً يتضمن:
+
+#### ① إحصائيات ObservabilitySystem
+
+```python
+s = obs.get_system_stats()
+# s['total_recorded']  — إجمالي القياسات المُسجَّلة
+# s['total_alerts']    — إجمالي التنبيهات المُطلَقة
+# s['total_anomalies'] — الشذوذات المكتشفة
+# s['unique_metrics']  — عدد المقاييس الفريدة
+```
+
+#### ② إحصائيات Live Chat
+
+```python
+chat_stats = conv_logger.get_stats()
+# chat_stats['total_logged']      — إجمالي المحادثات المُسجَّلة
+# chat_stats['unique_sessions']   — عدد الجلسات المختلفة
+# chat_stats['avg_latency_ms']    — متوسط زمن الاستجابة
+```
+
+#### ③ تفاصيل `rag.total_latency_ms`
+
+```python
+summary = obs.get_metrics_summary("rag.total_latency_ms")
+# summary['count']  — عدد القياسات
+# summary['mean']   — المتوسط
+# summary['min']    — الحد الأدنى
+# summary['max']    — الحد الأقصى
+# summary['p90']    — الشريحة 90th percentile
+# summary['p99']    — الشريحة 99th percentile
+```
+
+#### ④ التنبيهات النشطة
+
+```python
+alerts = obs.get_active_alerts()
+# يعرض آخر 5 تنبيهات مع: severity, metric_name, message
+```
+
+---
+
+## الدالة الرئيسية `main`
+
+```python
+def main() -> None:
+```
+
+### تسلسل التنفيذ
+
+```
+① build_rag()                    → RAGSystem
+② build_observability()          → ObservabilitySystem (مع قواعد التنبيه)
+③ ConversationLogger(max_turns=200)
+④ RAGObservabilityWrapper(rag, obs, conv_logger)
+⑤ DashboardExporter(obs, port=8888, refresh=2s, conv_logger)
+   └── dashboard.start()          → يُشغّل خادم الويب
+⑥ wrapper.add_documents(...)      → فهرسة المستندات
+⑦ StreamingRAG(rag, llm, StreamConfig)
+⑧ run_query_loop(25 iterations)
+⑨ print_final_stats()
+⑩ while True: time.sleep(1)      → يُبقي الـ Dashboard شغّالاً
+   └── Ctrl+C → obs.stop() + dashboard.stop()
+```
+
+### `DashboardExporter` — لوحة التحكم
+
+```python
+dashboard = DashboardExporter(
+    obs,
+    port                = 8888,
+    refresh_seconds     = 2,
+    conversation_logger = conv_logger,
+)
+dashboard.start()
+```
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `port` | `8888` | منفذ خادم الويب |
+| `refresh_seconds` | `2` | تحديث البيانات كل ثانيتين |
+| `conversation_logger` | `conv_logger` | يُفعّل تبويب 💬 Live Chat |
+
+> الوصول: `http://localhost:8888`
+
+### `StreamingRAG` — إعداد البث
+
+```python
+streaming_rag = StreamingRAG(
+    rag_system = rag,
+    llm        = rag.llm,
+    config     = StreamConfig(
+        chunk_size       = 4,
+        sim_delay        = 0.015,
+        max_context_docs = 3,
+        max_doc_chars    = 400,
+    ),
+)
+```
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `chunk_size` | `4` | عدد الرموز (tokens) في كل رقاقة بث |
+| `sim_delay` | `0.015s` | تأخير بين الرقائق لمحاكاة البث الحقيقي |
+| `max_context_docs` | `3` | أقصى عدد مستندات في السياق |
+| `max_doc_chars` | `400` | أقصى طول لكل مستند في السياق |
+
+### الإغلاق النظيف
+
+```python
+finally:
+    obs.stop()
+    dashboard.stop()
+```
+
+يضمن إيقاف جميع الخيوط (threads) والموارد بشكل آمن.
+
+---
+
+## دعم Jupyter
+
+```python
+def jupyter_demo(iterations=10, port=8888):
+    """
+    from rag_demo import jupyter_demo
+    wrapper, obs, conv_logger = jupyter_demo(iterations=10)
+    """
+```
+
+### الفرق عن `main()`
+
+| الجانب | `main()` | `jupyter_demo()` |
+|--------|----------|-----------------|
+| `nest_asyncio` | غير مطلوب | `nest_asyncio.apply()` لحل تعارض event loops |
+| `iterations` | `25` | `10` (أقل للتجربة) |
+| `delay_range` | `(0.3, 1.2)s` | `(0.2, 0.8)s` (أسرع) |
+| `sim_delay` | `0.015s` | `0.01s` |
+| **المخرج** | لا شيء | `(wrapper, obs, conv_logger)` للتحليل التفاعلي |
+| حلقة الانتظار | `while True` | لا توجد |
+
+---
+
+## جدول كل المقاييس
+
+| المقياس | النوع | الوحدة | أين يُسجَّل |
+|---------|-------|--------|------------|
+| `rag.query_count` | COUNTER | عدد | `query()`, `stream_query()` |
+| `rag.retrieval_latency_ms` | TIMER | ms | `retrieve()`, `query()`, `stream_query()` |
+| `rag.retrieved_docs_count` | GAUGE | عدد | `retrieve()`, `query()`, `stream_query()` |
+| `rag.avg_similarity_score` | GAUGE | 0.0–1.0 | `retrieve()`, `query()` |
+| `rag.generation_latency_ms` | TIMER | ms | `query()`, `stream_query()` |
+| `rag.answer_length_chars` | GAUGE | حرف | `query()`, `stream_query()` |
+| `rag.total_latency_ms` | TIMER | ms | `query()`, `stream_query()` |
+| `rag.error_count` | COUNTER | عدد | `query()`, `stream_query()` |
+| `rag.indexing_latency_ms` | TIMER | ms | `add_documents()` |
+| `rag.indexed_chunks_count` | COUNTER | عدد | `add_documents()` |
+
+---
+

@@ -1,0 +1,310 @@
+# 📡 RAG System with Monitoring — توثيق الكود
+
+> نظام **RAG مع مراقبة كاملة للأداء** باستخدام `MetricsCollector`  
+> يُسجّل كل خطوة من خطوات الاسترجاع والتوليد بمقاييس دقيقة قابلة للتحليل.
+
+---
+
+## 📋 جدول المحتويات
+
+1. [نظرة عامة](#نظرة-عامة)
+2. [المكونات](#المكونات)
+3. [تدفق الكود](#تدفق-الكود)
+4. [دالة `monitored_rag_query`](#دالة-monitored_rag_query)
+5. [مقاييس المراقبة](#مقاييس-المراقبة)
+6. [الفرق عن النسخة الأساسية](#الفرق-عن-النسخة-الأساسية)
+
+---
+
+## نظرة عامة
+
+يمتد هذا الكود على النظام الأساسي بإضافة طبقة **مراقبة (Monitoring)** شاملة تقيس:
+
+- زمن كل خطوة (Latency)
+- عدد الاستعلامات الناجحة والفاشلة
+- طول السياق والإجابة
+- توزيع درجات الاسترجاع
+
+```
+الاستعلام
+   │
+   ├──► [TIMER] استرجاع القطع         → rag.retrieval.latency
+   ├──► [COUNTER] إجمالي الاستعلامات  → rag.queries.total
+   ├──► [GAUGE] عدد القطع             → rag.docs.retrieved
+   ├──► [HISTOGRAM] أعلى درجة         → rag.retrieval.top_score
+   │
+   ├──► [TIMER] بناء السياق           → rag.context.build_time
+   ├──► [GAUGE] طول السياق            → rag.context.length_chars
+   │
+   ├──► [TIMER] توليد الإجابة         → rag.generation.latency
+   ├──► [GAUGE] طول الإجابة           → rag.answer.length_chars
+   └──► [HISTOGRAM] توزيع الطول       → rag.answer.length_hist
+```
+
+---
+
+## المكونات
+
+### 1. `HTMLStringLoader` — محمّل HTML النصي
+
+```python
+from fennec.document_loaders import HTMLStringLoader
+
+company_overview = read_text('company_overview.txt')
+company_overview_loader = HTMLStringLoader(company_overview).load()
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | تحميل نص خام (قد يحتوي HTML) كمستند |
+| **الفرق عن `TextLoader`** | يقبل **نصاً مباشراً** كسلسلة بدل مسار ملف |
+| **الاستخدام** | مفيد عند قراءة الملف يدوياً أو استقباله من API |
+
+#### دالة القراءة المساعدة
+
+```python
+def read_text(file_path: str) -> str:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        return f.read()
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | قراءة ملف نصي وإرجاع محتواه كـ `str` |
+| **الترميز** | `utf-8` لدعم العربية والأحرف الخاصة |
+
+---
+
+### 2. `MetricsCollector` — جامع المقاييس ⭐
+
+```python
+from fennec.monitor import MetricsCollector
+
+collector = MetricsCollector(max_metrics=10_000)
+```
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `max_metrics` | `10,000` | الحد الأقصى للمقاييس المحفوظة في الذاكرة |
+
+**أنواع القياسات التي يدعمها:**
+
+| النوع | الدالة | الوصف |
+|-------|--------|-------|
+| **Timer** | `collector.timer(name)` | يقيس زمن تنفيذ كتلة كود (Context Manager) |
+| **Counter** | `collector.increment(name)` | عداد يزيد بمقدار 1 في كل استدعاء |
+| **Gauge** | `collector.gauge(name, value)` | يُسجّل قيمة لحظية (آخر قيمة تُحفظ) |
+| **Histogram** | `collector.histogram(name, value)` | يوزّع القيم في حاويات لتحليل الانتشار |
+
+---
+
+### 3. `RAGSystem` (الإعداد المبسّط)
+
+```python
+base_rag = RAGSystem(
+    vector_db       = FAISSVectorDatabase(embedder=embedder),
+    llm             = GeminiInterface(api_key=api),
+    chunker         = MultilanguageTextChunker(),
+    context_manager = ContextManager(),
+)
+```
+
+> هذه النسخة تستخدم الإعدادات الافتراضية بدون `RAGConfig` مخصص، مما يجعلها أبسط وأسرع للتجربة.
+
+---
+
+## تدفق الكود
+
+```
+┌──────────────────────────────────────────────┐
+│            تهيئة النظام                      │
+│  read_text() → HTMLStringLoader → load()     │
+│  GeminiEmbedder → FAISSVectorDatabase        │
+│  GeminiInterface + MultilanguageTextChunker  │
+│  ContextManager → RAGSystem                  │
+│  MetricsCollector(max=10,000)                │
+└─────────────────┬────────────────────────────┘
+                  │
+                  ▼
+┌──────────────────────────────────────────────┐
+│         إضافة قاعدة المعرفة                  │
+│  base_rag.add_documents(company_overview_loader)│
+└─────────────────┬────────────────────────────┘
+                  │
+                  ▼
+┌──────────────────────────────────────────────┐
+│   تشغيل الاستعلامات مع المراقبة              │
+│  for q in test_queries:                      │
+│      monitored_rag_query(q)                  │
+└─────────────────┬────────────────────────────┘
+                  │
+                  ▼
+┌──────────────────────────────────────────────┐
+│         طباعة ملخص المقاييس                  │
+│  collector.get_summary()                     │
+└──────────────────────────────────────────────┘
+```
+
+---
+
+## دالة `monitored_rag_query`
+
+```python
+def monitored_rag_query(query: str) -> str:
+```
+
+### الوصف
+
+تُنفّذ استعلام RAG كامل مع تسجيل مقياس لكل خطوة داخلية.
+
+### المدخل
+
+| المعامل | النوع | الوصف |
+|---------|-------|-------|
+| `query` | `str` | السؤال المطلوب الإجابة عنه |
+
+### المخرج
+
+| النوع | الوصف |
+|-------|-------|
+| `str` | الإجابة المولّدة، أو رسالة خطأ إذا فشل الاسترجاع |
+
+### الخطوات الداخلية
+
+#### ① خطوة الاسترجاع
+
+```python
+with collector.timer("rag.retrieval.latency"):
+    retrieved = base_rag.retrieve(query)
+
+collector.increment("rag.queries.total")
+collector.gauge("rag.docs.retrieved", len(retrieved))
+
+if not retrieved:
+    collector.increment("rag.retrieval.failures")
+    return "❌ لم يتم العثور على معلومات."
+
+top_score = retrieved[0][1]
+collector.histogram("rag.retrieval.top_score", top_score)
+collector.increment("rag.retrieval.success")
+```
+
+| المقياس | النوع | القيمة |
+|---------|-------|--------|
+| `rag.retrieval.latency` | Timer | زمن استرجاع القطع |
+| `rag.queries.total` | Counter | +1 لكل استعلام |
+| `rag.docs.retrieved` | Gauge | عدد القطع المُسترجعة |
+| `rag.retrieval.failures` | Counter | +1 إذا لم تُسترجع أي قطعة |
+| `rag.retrieval.top_score` | Histogram | درجة تشابه أعلى قطعة |
+| `rag.retrieval.success` | Counter | +1 إذا نجح الاسترجاع |
+
+---
+
+#### ② خطوة بناء السياق
+
+```python
+with collector.timer("rag.context.build_time"):
+    context = base_rag.context_manager.build(query, retrieved)
+
+collector.gauge("rag.context.length_chars", len(context))
+```
+
+| المقياس | النوع | القيمة |
+|---------|-------|--------|
+| `rag.context.build_time` | Timer | زمن بناء السياق |
+| `rag.context.length_chars` | Gauge | طول السياق بالحروف |
+
+---
+
+#### ③ خطوة التوليد
+
+```python
+with collector.timer("rag.generation.latency"):
+    answer = base_rag.llm.generate(
+        base_rag._build_prompt(query, context, language_pr="ar")
+    )
+
+collector.gauge("rag.answer.length_chars", len(answer))
+collector.histogram("rag.answer.length_hist", len(answer))
+collector.increment("rag.queries.successful")
+```
+
+| المقياس | النوع | القيمة |
+|---------|-------|--------|
+| `rag.generation.latency` | Timer | زمن توليد الإجابة |
+| `rag.answer.length_chars` | Gauge | طول الإجابة بالحروف |
+| `rag.answer.length_hist` | Histogram | توزيع أطوال الإجابات |
+| `rag.queries.successful` | Counter | +1 لكل استعلام مكتمل |
+
+> **ملاحظة:** `language_pr="ar"` يوجّه النموذج لتوليد الإجابة باللغة العربية.
+
+---
+
+
+## مقاييس المراقبة
+
+### جدول كل المقاييس
+
+| المقياس | النوع | الوحدة | الوصف |
+|---------|-------|--------|-------|
+| `rag.queries.total` | Counter | عدد | إجمالي الاستعلامات |
+| `rag.queries.successful` | Counter | عدد | الاستعلامات المكتملة |
+| `rag.retrieval.success` | Counter | عدد | حالات نجاح الاسترجاع |
+| `rag.retrieval.failures` | Counter | عدد | حالات فشل الاسترجاع |
+| `rag.retrieval.latency` | Timer | ms | زمن الاسترجاع |
+| `rag.context.build_time` | Timer | ms | زمن بناء السياق |
+| `rag.generation.latency` | Timer | ms | زمن التوليد |
+| `rag.docs.retrieved` | Gauge | عدد | آخر عدد قطع مسترجعة |
+| `rag.context.length_chars` | Gauge | حرف | آخر طول سياق |
+| `rag.answer.length_chars` | Gauge | حرف | آخر طول إجابة |
+| `rag.retrieval.top_score` | Histogram | 0.0–1.0 | توزيع أعلى درجات التشابه |
+| `rag.answer.length_hist` | Histogram | حرف | توزيع أطوال الإجابات |
+
+### قراءة الملخص
+
+```python
+print(collector.get_summary())
+```
+
+يُخرج تقريراً شاملاً يتضمن:
+- قيم العدادات (Counters)
+- آخر قيم المؤشرات (Gauges)
+- إحصائيات التوزيع للـ Histograms (min, max, mean, p50, p95)
+- إجمالي قياسات التوقيت (Timers)
+
+---
+
+## الفرق عن النسخة الأساسية
+
+| الجانب | `main.py` (النسخة الأولى) | هذا الكود |
+|--------|--------------------------|-----------|
+| **تحميل المستندات** | `TextLoader("file.txt")` | `HTMLStringLoader(text_content)` |
+| **إعداد RAG** | `RAGConfig` مخصص | إعدادات افتراضية |
+| **المراقبة** | `RAGEvaluator` للجودة | `MetricsCollector` للأداء |
+| **التركيز** | تقييم دقة الإجابات | قياس سرعة وكفاءة النظام |
+| **المخرجات** | تقرير HTML + JSON | ملخص نصي للمقاييس |
+| **لغة الإجابة** | إنجليزية (`"en"`) | عربية (`"ar"`) |
+| **الـ Prompt** | تلقائي عبر `rag.generate()` | يدوي عبر `_build_prompt()` |
+
+---
+
+## الاستعلامات التجريبية
+
+```python
+test_queries = [
+    "ما هو الـ RAG؟",
+    "كيف يعمل تعلم الآلة؟",
+]
+```
+
+لكل استعلام يُطبع:
+
+```
+Q: ما هو الـ RAG؟
+A: الـ RAG هو نظام يجمع بين استرجاع المعلومات...
+```
+
+> يُعرض أول **70 حرفاً** فقط من الإجابة متبوعاً بـ `...`
+
+---
+

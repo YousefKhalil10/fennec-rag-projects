@@ -1,0 +1,503 @@
+# 📚 Fennec RAG System — توثيق شامل
+
+> نظام استرجاع وتوليد معزَّز (Retrieval-Augmented Generation) مبني على مكتبة `fennec-rag`، يدعم الذاكرة التحادثية بأنواعها المختلفة.
+
+---
+
+## 📑 جدول المحتويات
+
+1. [نظرة عامة](#نظرة-عامة)
+2. [المكونات الأساسية](#المكونات-الأساسية)
+3. [إعداد النظام](#إعداد-النظام)
+4. [أنواع الذاكرة](#أنواع-الذاكرة)
+5. [دالة الاستعلام التحادثي](#دالة-الاستعلام-التحادثي)
+6. [أمثلة الاستخدام](#أمثلة-الاستخدام)
+7. [مقارنة أنواع الذاكرة](#مقارنة-أنواع-الذاكرة)
+
+---
+
+## نظرة عامة
+
+يُنشئ هذا التطبيق نظام **RAG تحادثي** (Conversational RAG) يجمع بين:
+
+- **استرجاع المعلومات** من قاعدة معرفة خارجية (Pinecone) بناءً على سؤال المستخدم.
+- **الذاكرة التحادثية** للحفاظ على سياق المحادثة عبر الأسئلة المتعددة.
+- **نموذج لغوي** (Gemini) لتوليد إجابات دقيقة ومترابطة.
+
+### تدفق العمل
+
+```
+سؤال المستخدم
+      │
+      ▼
+تحميل الذاكرة (History)
+      │
+      ▼
+استرجاع المستندات ذات الصلة (Vector DB)
+      │
+      ▼
+بناء الـ Prompt الكامل
+      │
+      ▼
+توليد الإجابة (LLM)
+      │
+      ▼
+حفظ التبادل في الذاكرة
+      │
+      ▼
+إرجاع الإجابة
+```
+
+---
+
+## المكونات الأساسية
+
+### 1. `GeminiInterface` — واجهة النموذج اللغوي
+
+```python
+from fennec.llm import GeminiInterface
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | التواصل مع نموذج Gemini لتوليد النصوص |
+| **المدخل** | `api_key` — مفتاح Google AI API |
+| **الاستخدام** | `llm.generate(prompt)` لتوليد إجابة نصية |
+
+---
+
+### 2. `GeminiEmbedder` — محول النصوص إلى تضمينات
+
+```python
+from fennec.embeddings import GeminiEmbedder
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | تحويل النصوص إلى متجهات رقمية (Embeddings) |
+| **المدخل** | `api_key` — مفتاح Google AI API |
+| **الاستخدام** | يُستخدم داخلياً من قِبَل قاعدة البيانات المتجهية |
+
+---
+
+### 3. `PineconeVectorDatabase` — قاعدة البيانات المتجهية
+
+```python
+from fennec.vector_database import PineconeVectorDatabase
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | تخزين واسترجاع المستندات باستخدام البحث الدلالي |
+| **المدخلات** | `embedder` — كائن التضمين، `api_key` — مفتاح Pinecone |
+| **الوظيفة** | تحويل الأسئلة إلى متجهات والبحث عن أقرب المستندات |
+
+---
+
+### 4. `MultilanguageTextChunker` — قاطع النصوص متعدد اللغات
+
+```python
+from fennec.chunks import MultilanguageTextChunker
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | تقسيم المستندات الطويلة إلى أجزاء (Chunks) قابلة للمعالجة |
+| **الميزة** | دعم اللغات المتعددة بما فيها العربية |
+| **الاستخدام** | يُطبَّق تلقائياً عند إضافة مستندات للنظام |
+
+---
+
+### 5. `ContextManager` — مدير السياق
+
+```python
+from fennec.context import ContextManager
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | بناء سياق منظم من المستندات المسترجعة |
+| **الوظيفة** | تحويل قائمة المستندات إلى نص سياق جاهز للـ Prompt |
+| **الاستخدام** | `context_manager.build(query, retrieved_docs)` |
+
+---
+
+### 6. `RAGSystem` — النظام الأساسي للـ RAG
+
+```python
+from fennec.rag.core import RAGSystem
+```
+
+النواة الرئيسية التي تجمع كل المكونات السابقة:
+
+```python
+base_rag = RAGSystem(
+    vector_db=PineconeVectorDatabase(embedder=embedder, api_key=api_pinecone),
+    llm=GeminiInterface(api_key=api),
+    chunker=MultilanguageTextChunker(),
+    context_manager=ContextManager(),
+)
+```
+
+| المعامل | النوع | الوصف |
+|---------|-------|-------|
+| `vector_db` | `PineconeVectorDatabase` | قاعدة البيانات للتخزين والاسترجاع |
+| `llm` | `GeminiInterface` | النموذج اللغوي لتوليد الإجابات |
+| `chunker` | `MultilanguageTextChunker` | أداة تقطيع المستندات |
+| `context_manager` | `ContextManager` | مدير بناء السياق |
+
+**الأساليب المهمة:**
+
+```python
+base_rag.add_documents(docs)          # إضافة مستندات لقاعدة المعرفة
+base_rag.retrieve(query, top_k=2)     # استرجاع أقرب K مستندات
+base_rag.llm.generate(prompt)         # توليد إجابة من النموذج
+base_rag.context_manager.build(...)   # بناء سياق من المستندات
+```
+
+---
+
+### 7. `TextLoader` — محمّل الملفات النصية
+
+```python
+from fennec.document_loaders import TextLoader
+
+loader = TextLoader("company_overview.txt").load()
+base_rag.add_documents(loader)
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | قراءة ملفات نصية وتحويلها إلى تنسيق يقبله النظام |
+| **المدخل** | مسار الملف النصي |
+| **المخرج** | قائمة مستندات جاهزة للإضافة |
+
+---
+
+## إعداد النظام
+
+### الخطوة 1: تهيئة المكونات
+
+```python
+# مفاتيح API
+api = "YOUR_GOOGLE_API_KEY"
+api_pinecone = "YOUR_PINECONE_API_KEY"
+
+# إنشاء المُضمِّن
+embedder = GeminiEmbedder(api_key=api)
+
+# بناء نظام RAG الأساسي
+base_rag = RAGSystem(
+    vector_db=PineconeVectorDatabase(embedder=embedder, api_key=api_pinecone),
+    llm=GeminiInterface(api_key=api),
+    chunker=MultilanguageTextChunker(),
+    context_manager=ContextManager(),
+)
+```
+
+### الخطوة 2: تحميل المستندات
+
+```python
+loader = TextLoader("company_overview.txt").load()
+base_rag.add_documents(loader)
+```
+
+> ⚠️ **ملاحظة:** يجب تحميل المستندات قبل بدء أي استعلام.
+
+---
+
+## أنواع الذاكرة
+
+تُستورد جميع أنواع الذاكرة من `fennec.memory`:
+
+```python
+from fennec.memory import (
+    ConversationBufferMemory,
+    ConversationBufferWindowMemory,
+    ConversationSummaryMemory,
+    ConversationEntityMemory,
+)
+```
+
+---
+
+### 🧠 أ) `ConversationBufferMemory` — الذاكرة الكاملة
+
+```python
+buffer_mem = ConversationBufferMemory(
+    return_messages=False,
+    input_key="input",
+    output_key="output",
+    memory_key="history",
+)
+```
+
+**كيف تعمل:** تحتفظ بكامل تاريخ المحادثة بدون أي حذف.
+
+| المعامل | الوصف |
+|---------|-------|
+| `return_messages` | إذا `True` يُرجع كائنات رسائل، إذا `False` يُرجع نصاً |
+| `input_key` | مفتاح حفظ سؤال المستخدم |
+| `output_key` | مفتاح حفظ إجابة النموذج |
+| `memory_key` | المفتاح المُستخدم لاسترجاع التاريخ لاحقاً |
+
+**متى تستخدمها:**
+- محادثات قصيرة إلى متوسطة
+- عندما تحتاج إلى السياق الكامل
+
+**المحدودية:** تستهلك ذاكرة كبيرة في المحادثات الطويلة جداً.
+
+---
+
+### 🪟 ب) `ConversationBufferWindowMemory` — ذاكرة النافذة المنزلقة
+
+```python
+window_mem = ConversationBufferWindowMemory(k=2)
+```
+
+**كيف تعمل:** تحتفظ فقط بآخر `k` تبادلات وتحذف الأقدم تلقائياً.
+
+| المعامل | الوصف |
+|---------|-------|
+| `k` | عدد التبادلات (سؤال + إجابة) المحفوظة |
+
+**مثال على السلوك مع `k=2`:**
+
+```
+سؤال 1 ← محفوظ
+سؤال 2 ← محفوظ
+سؤال 3 ← يُضاف، سؤال 1 يُحذف  ✓
+سؤال 4 ← يُضاف، سؤال 2 يُحذف  ✓
+```
+
+**متى تستخدمها:**
+- محادثات طويلة حيث السياق القريب فقط هو المهم
+- تطبيقات بموارد محدودة
+
+---
+
+### 📝 ج) `ConversationSummaryMemory` — ذاكرة التلخيص
+
+```python
+summary_mem = ConversationSummaryMemory(
+    llm=base_rag.llm,
+    max_token_limit=300,
+)
+```
+
+**كيف تعمل:** بدلاً من حفظ المحادثة كاملة، يُلخِّص النموذج اللغوي المحادثة بشكل تراكمي. لا يبدأ التلخيص إلا إذا تجاوز حجم المحادثة `max_token_limit`.
+
+| المعامل | الوصف |
+|---------|-------|
+| `llm` | النموذج اللغوي المستخدم في عملية التلخيص |
+| `max_token_limit` | الحد الأدنى من الرموز قبل بدء التلخيص |
+
+> 💡 **ملاحظة:** إذا كانت المحادثة أقل من `max_token_limit` لن يحدث تلخيص.
+
+**متى تستخدمها:**
+- محادثات طويلة جداً تحتاج إلى سياق عام
+- عندما تريد توفير التوكنز مع الحفاظ على المعنى العام
+
+---
+
+### 🏷️ د) `ConversationEntityMemory` — ذاكرة الكيانات
+
+```python
+entity_mem = ConversationEntityMemory()
+```
+
+**كيف تعمل:** تُتتبِّع الكيانات المُذكورة في المحادثة (أسماء شركات، أشخاص، مفاهيم) وتبني قاموساً من المعلومات عنها.
+
+**مثال على ما تتتبعه:**
+
+```python
+# بعد محادثة تذكر: RAG, OpenAI, GPT-4, Anthropic, Claude
+entities = entity_mem.entity_store
+# النتيجة: {"RAG": "...", "OpenAI": "...", "GPT-4": "...", "Anthropic": "...", "Claude": "..."}
+```
+
+**متى تستخدمها:**
+- تطبيقات خدمة العملاء (تتبع بيانات العميل)
+- أنظمة تحليل محادثات الأعمال
+- عندما تحتاج إلى تجميع معلومات حول كيانات محددة عبر المحادثة
+
+---
+
+## دالة الاستعلام التحادثي
+
+```python
+def conversational_rag_query(
+    query: str,
+    memory,
+    memory_key: str = "history",
+) -> str:
+```
+
+### شرح خطوات الدالة
+
+```python
+def conversational_rag_query(query, memory, memory_key="history"):
+
+    # 1️⃣ تحميل تاريخ المحادثة من الذاكرة
+    mem_vars = memory.load_memory_variables({"input": query})
+    history  = mem_vars.get(memory_key, "")
+
+    # 2️⃣ استرجاع أقرب مستندين من قاعدة المعرفة
+    retrieved = rag.retrieve(query, top_k=2)
+    context   = rag.context_manager.build(query, retrieved)
+
+    # 3️⃣ بناء الـ Prompt الكامل
+    if history:
+        full_prompt = (
+            f"سياق المحادثة السابقة:\n{str(history)[:400]}\n\n"
+            f"معلومات مسترجعة:\n{context}\n\n"
+            f"السؤال الحالي: {query}\nالإجابة:"
+        )
+    else:
+        full_prompt = f"معلومات مسترجعة:\n{context}\n\nالسؤال: {query}\nالإجابة:"
+
+    # 4️⃣ توليد الإجابة
+    answer = rag.llm.generate(full_prompt)
+
+    # 5️⃣ حفظ التبادل في الذاكرة
+    memory.save_context({"input": query}, {"output": answer})
+
+    return answer
+```
+
+### المعاملات
+
+| المعامل | النوع | الوصف |
+|---------|-------|-------|
+| `query` | `str` | سؤال المستخدم |
+| `memory` | `Memory` | كائن الذاكرة (أي نوع من الأنواع الأربعة) |
+| `memory_key` | `str` | مفتاح استرجاع التاريخ (افتراضي: `"history"`) |
+
+> 💡 **ملاحظة مهمة:** يُقيِّد الكود تاريخ المحادثة بـ 400 حرف فقط `[:400]` لتجنب تجاوز حد الـ Prompt.
+
+---
+
+## أمثلة الاستخدام
+
+### مثال 1: محادثة مع Buffer Memory
+
+```python
+buffer_mem = ConversationBufferMemory(
+    return_messages=False,
+    input_key="input",
+    output_key="output",
+    memory_key="history",
+)
+
+questions = [
+    "ما هو الـ RAG؟",
+    "ما هي مزاياه على النماذج اللغوية التقليدية؟",
+    "هل يُستخدم RAG في قواعد المعرفة المؤسسية؟",
+]
+
+for q in questions:
+    answer = conversational_rag_query(q, buffer_mem)
+    print(f"👤 {q}")
+    print(f"🤖 {answer}")
+
+# عدد الرسائل المحفوظة
+print(len(buffer_mem.chat_memory))  # 6 (3 أسئلة + 3 إجابات)
+```
+
+---
+
+### مثال 2: محادثة مع Window Memory (k=2)
+
+```python
+window_mem = ConversationBufferWindowMemory(k=2)
+
+questions = [
+    "ما هو الذكاء الاصطناعي؟",   # سيُحذف لاحقاً
+    "ما هو تعلم الآلة؟",          # سيُحذف لاحقاً
+    "ما هي الشبكات العصبية؟",     # يُزيح السؤال الأول
+    "ما هي التضمينات؟",            # يُزيح السؤال الثاني
+]
+
+for q in questions:
+    conversational_rag_query(q, window_mem)
+
+# الذاكرة تحتفظ فقط بآخر 2 تبادلات
+print(len(window_mem.chat_memory))  # 4 رسائل فقط (آخر 2)
+```
+
+---
+
+### مثال 3: محادثة مع Summary Memory
+
+```python
+summary_mem = ConversationSummaryMemory(
+    llm=base_rag.llm,
+    max_token_limit=300,
+)
+
+for q in questions:
+    conversational_rag_query(q, summary_mem)
+
+# المحادثة مُلخَّصة في رمز واحد بدلاً من تاريخ كامل
+```
+
+---
+
+### مثال 4: تتبع الكيانات مع Entity Memory
+
+```python
+entity_mem = ConversationEntityMemory()
+
+entity_queries = [
+    "ما هو RAG؟",
+    "كيف طوّرت OpenAI نموذج GPT-4؟",
+    "هل Anthropic طوّرت Claude بناءً على RAG؟",
+]
+
+for q in entity_queries:
+    conversational_rag_query(q, entity_mem, memory_key="history")
+
+# عرض الكيانات المُتتبَّعة
+entities = entity_mem.entity_store
+print(list(entities.keys()))
+# مثال: ["RAG", "OpenAI", "GPT-4", "Anthropic", "Claude"]
+```
+
+---
+
+## مقارنة أنواع الذاكرة
+
+| الميزة | Buffer | Window | Summary | Entity |
+|--------|--------|--------|---------|--------|
+| **حجم الذاكرة** | يتزايد دائماً | ثابت (K تبادلات) | صغير (ملخص) | متغير |
+| **دقة السياق** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| **كفاءة التوكنز** | ⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **مناسب لـ** | محادثات قصيرة | محادثات طويلة | محادثات طويلة جداً | تتبع كيانات |
+| **تكلفة إضافية** | لا | لا | نعم (LLM للتلخيص) | نعم (LLM للاستخراج) |
+
+---
+
+## 🔧 المتطلبات
+
+```txt
+fennec
+google-generativeai   # Gemini API
+pinecone-client       # Pinecone Vector DB
+```
+
+---
+
+## 🔐 متغيرات البيئة المطلوبة
+
+```python
+api          = "GOOGLE_AI_API_KEY"     # مفتاح Google AI (Gemini)
+api_pinecone = "PINECONE_API_KEY"      # مفتاح Pinecone
+```
+
+> ⚠️ **تحذير أمني:** لا تضع مفاتيح API مباشرة في الكود. استخدم متغيرات البيئة أو ملفات `.env`.
+
+```python
+import os
+api          = os.environ.get("GOOGLE_API_KEY")
+api_pinecone = os.environ.get("PINECONE_API_KEY")
+```

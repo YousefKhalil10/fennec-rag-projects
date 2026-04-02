@@ -1,0 +1,266 @@
+# 🦊 Fennec RAG System — توثيق المشروع
+
+## نظرة عامة
+
+هذا التطبيق يُنفّذ نظام **Retrieval-Augmented Generation (RAG)** مُدعَّم بطبقة **Cache متعددة المستويات** باستخدام مكتبة `fennec-rag`. يُتيح النظام الإجابة على الاستعلامات النصية بالاعتماد على مستند خارجي، مع تحسين الأداء عن طريق تخزين النتائج مؤقتًا وتجنُّب الطلبات المكررة إلى نموذج اللغة.
+
+---
+
+## 📦 المكونات الرئيسية
+
+### 1. `GeminiEmbedder` — نموذج التضمين
+
+```python
+from fennec.embeddings import GeminiEmbedder
+
+embedder = GeminiEmbedder(api_key=api)
+```
+
+**الوظيفة:** يحوّل النصوص إلى متّجهات رقمية (Embeddings) باستخدام نموذج Gemini من Google.  
+**الاستخدام:** يُمرَّر إلى قاعدة البيانات المتجهية لفهرسة المستندات والاستعلام عنها.
+
+---
+
+### 2. `FAISSVectorDatabase` — قاعدة البيانات المتجهية
+
+```python
+from fennec.vector_database import FAISSVectorDatabase
+
+vector_db = FAISSVectorDatabase(embedder=embedder)
+```
+
+**الوظيفة:** تخزّن متجهات النصوص وتُجري عمليات البحث بالتشابه (Similarity Search) بكفاءة عالية باستخدام مكتبة FAISS من Meta.  
+**المدخلات:** تستقبل `embedder` لتحويل النصوص قبل تخزينها.
+
+---
+
+### 3. `GeminiInterface` — نموذج اللغة (LLM)
+
+```python
+from fennec.llm import GeminiInterface
+
+llm = GeminiInterface(api_key=api)
+```
+
+**الوظيفة:** يُمثّل الواجهة مع نموذج Gemini اللغوي لتوليد الإجابات بناءً على السياق المُسترجَع.
+
+---
+
+### 4. `MultilanguageTextChunker` — تقطيع النصوص
+
+```python
+from fennec.chunks import MultilanguageTextChunker
+
+chunker = MultilanguageTextChunker()
+```
+
+**الوظيفة:** يُقسِّم النصوص الطويلة إلى أجزاء (Chunks) قابلة للمعالجة، مع دعم اللغات المتعددة بما فيها العربية.
+
+---
+
+### 5. `ContextManager` — مدير السياق
+
+```python
+from fennec.context import ContextManager
+
+context_manager = ContextManager()
+```
+
+**الوظيفة:** يُدير السياق المُسترجَع من قاعدة البيانات ويُنظّمه قبل تمريره إلى نموذج اللغة.
+
+---
+
+### 6. `RAGSystem` — النظام الأساسي
+
+```python
+from fennec.rag.core import RAGSystem
+
+base_rag = RAGSystem(
+    vector_db=FAISSVectorDatabase(embedder=embedder),
+    llm=GeminiInterface(api_key=api),
+    chunker=MultilanguageTextChunker(),
+    context_manager=ContextManager(),
+)
+```
+
+**الوظيفة:** المكوّن المحوري الذي يجمع جميع العناصر في خط أنابيب RAG متكامل.
+
+**الطرق الرئيسية:**
+
+| الطريقة | الوصف |
+|---|---|
+| `add_documents(docs)` | يُضيف مستندات إلى قاعدة البيانات المتجهية |
+| `generate(query)` | يستعلم ويُولِّد إجابة بناءً على المستندات |
+
+---
+
+### 7. `TextLoader` — محمّل المستندات
+
+```python
+from fennec.document_loaders import TextLoader
+
+load = TextLoader("company_overview.txt").load()
+```
+
+**الوظيفة:** يقرأ ملفات النصوص من القرص ويُعيدها بصيغة تقبلها `RAGSystem`.
+
+---
+
+### 8. `MultiLevelCache` — الكاش متعدد المستويات
+
+```python
+from fennec.cache import MultiLevelCache, CacheConfig, CacheStrategy
+
+cache_config = CacheConfig(
+    l1_max_items=100,
+    l2_max_items=500,
+    default_ttl=600,
+    enable_stats=True,
+)
+cache = MultiLevelCache(strategy=CacheStrategy.LRU, config=cache_config)
+```
+
+**الوظيفة:** يُخزِّن نتائج الاستعلامات مؤقتًا لتجنُّب الطلبات المكررة إلى نموذج اللغة.
+
+**مستويات الكاش:**
+
+| المستوى | الحجم الأقصى | السرعة |
+|---|---|---|
+| L1 (ذاكرة سريعة) | 100 عنصر | أسرع |
+| L2 (ذاكرة أكبر) | 500 عنصر | أبطأ نسبيًا |
+
+**إعدادات `CacheConfig`:**
+
+| الإعداد | القيمة | الوصف |
+|---|---|---|
+| `l1_max_items` | 100 | الحد الأقصى لعناصر L1 |
+| `l2_max_items` | 500 | الحد الأقصى لعناصر L2 |
+| `default_ttl` | 600 ثانية | مدة صلاحية النتيجة (10 دقائق) |
+| `enable_stats` | True | تفعيل تتبّع الإحصائيات |
+
+**استراتيجية الإزاحة:** `CacheStrategy.LRU` — يُزيل العناصر الأقل استخدامًا أولًا.
+
+**الطرق الرئيسية:**
+
+| الطريقة | الوصف |
+|---|---|
+| `cache.get(key)` | يجلب قيمة من الكاش |
+| `cache.set(key, value)` | يحفظ قيمة في الكاش |
+| `cache.get_stats()` | يُعيد إحصائيات الاستخدام |
+
+---
+
+## 🔄 تدفق العمل
+
+```
+استعلام المستخدم
+       │
+       ▼
+  هل النتيجة في الكاش؟
+  ┌────┴────┐
+ نعم       لا
+  │         │
+  ▼         ▼
+⚡ إرجاع   🔍 بحث في FAISS
+من الكاش    │
+            ▼
+       استرجاع السياق
+            │
+            ▼
+       توليد الإجابة
+       بـ Gemini LLM
+            │
+            ▼
+       حفظ في الكاش
+            │
+            ▼
+       إرجاع الإجابة
+```
+
+---
+
+## 🧩 دالة `cached_rag_query`
+
+```python
+def cached_rag_query(query: str) -> Tuple[str, bool]:
+```
+
+**الوصف:** دالة مُغلِّفة تجمع الكاش مع نظام RAG.
+
+**المدخلات:** نص الاستعلام `query`.  
+**المخرجات:** Tuple يحتوي على:
+- `answer` — نص الإجابة
+- `from_cache` — `True` إذا جاءت من الكاش، `False` إذا نفَّذت RAG حقيقيًا
+
+**آلية توليد مفتاح الكاش:**
+```python
+cache_key = f"rag:query:{query.strip().lower()}"
+```
+يُطبَّق `strip()` و`lower()` لضمان مطابقة الاستعلامات المتماثلة بغض النظر عن المسافات أو حالة الأحرف.
+
+---
+
+## 📊 إحصائيات الكاش
+
+```python
+stats = cache.get_stats()
+```
+
+| المقياس | الوصف |
+|---|---|
+| `l1_items` | عدد العناصر الحالية في L1 |
+| `hits` | عدد مرات الإجابة من الكاش |
+| `misses` | عدد مرات تنفيذ RAG الحقيقي |
+| `hit_rate` | نسبة الإجابات من الكاش = hits / (hits + misses) |
+
+---
+
+## ⚙️ متطلبات التشغيل
+
+```
+fennec
+faiss-cpu (أو faiss-gpu)
+google-generativeai
+```
+
+يجب تعريف متغير `api` يحتوي على مفتاح Gemini API قبل تشغيل الكود:
+
+```python
+api = "YOUR_GEMINI_API_KEY"
+```
+
+---
+
+## 📁 هيكل الملفات
+
+```
+project/
+├── main.py                  # الكود الرئيسي
+└── company_overview.txt     # المستند المصدري للـ RAG
+```
+
+---
+
+## 🧪 مثال على المخرجات
+
+```
+🔍 تشغيل 5 استعلام على الـ RAG:
+
+  🔄 RAG (1240.3ms)
+  Q: ما هو الـ RAG وكيف يعمل؟
+  A: الـ RAG هو نظام يجمع بين استرجاع المعلومات وتوليد النصوص...
+
+  🔄 RAG (980.1ms)
+  Q: ما هو الذكاء الاصطناعي؟
+  A: الذكاء الاصطناعي هو محاكاة الذكاء البشري في الآلات...
+
+  ⚡ Cache (0.2ms)
+  Q: ما هو الـ RAG وكيف يعمل؟
+  A: الـ RAG هو نظام يجمع بين استرجاع المعلومات وتوليد النصوص...
+
+  📊 Cache Stats:
+     L1 items : 2
+     hits     : 2
+     misses   : 3
+     hit rate : 40%
+```

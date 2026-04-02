@@ -1,0 +1,419 @@
+# 📚 RAG System — توثيق التطبيق
+
+> **Retrieval-Augmented Generation System** مبني على مكتبة `fennec-rag`  
+> يجمع بين استرجاع المعلومات من قاعدة معرفة وتوليد إجابات ذكية باستخدام نماذج اللغة الكبيرة.
+
+---
+
+## 📋 جدول المحتويات
+
+1. [نظرة عامة](#نظرة-عامة)
+2. [المكونات الرئيسية](#المكونات-الرئيسية)
+3. [تدفق التطبيق](#تدفق-التطبيق)
+4. [الإعداد والتهيئة](#الإعداد-والتهيئة)
+5. [مراحل التشغيل](#مراحل-التشغيل)
+6. [نظام التقييم](#نظام-التقييم)
+7. [المخرجات](#المخرجات)
+
+---
+
+## نظرة عامة
+
+يُنفّذ هذا التطبيق نظام **RAG (Retrieval-Augmented Generation)** متكامل يمر بعدة مراحل:
+
+```
+المستندات ──► تقطيع ──► تضمين (Embeddings) ──► قاعدة متجهات
+                                                       │
+السؤال ──────────────────────────────────────► استرجاع القطع
+                                                       │
+                                              توليد الإجابة (LLM)
+                                                       │
+                                                تقييم الجودة
+```
+
+---
+
+## المكونات الرئيسية
+
+### 1. `TextLoader` — محمّل المستندات
+
+```python
+from fennec.document_loaders import TextLoader
+
+company_overview_loader = TextLoader("company_overview.txt").load()
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | تحميل ملفات نصية من القرص |
+| **المدخل** | مسار الملف النصي |
+| **المخرج** | كائن مستند جاهز للإضافة إلى RAG |
+
+---
+
+### 2. `GeminiEmbedder` — نموذج التضمين
+
+```python
+from fennec.embeddings import GeminiEmbedder
+
+embedder = GeminiEmbedder(api_key=api)
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | تحويل النصوص إلى متجهات رقمية (Embeddings) |
+| **النموذج** | Google Gemini Embeddings |
+| **الاستخدام** | يُمرَّر إلى `FAISSVectorDatabase` |
+
+---
+
+### 3. `FAISSVectorDatabase` — قاعدة بيانات المتجهات
+
+```python
+from fennec.vector_database import FAISSVectorDatabase
+
+vector_db = FAISSVectorDatabase(embedder=embedder)
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | تخزين وبحث متجهات النصوص بكفاءة |
+| **المحرك** | FAISS (Facebook AI Similarity Search) |
+| **البحث** | يعتمد على تشابه Cosine أو مسافة L2 |
+
+---
+
+### 4. `GeminiInterface` — نموذج اللغة الكبيرة (LLM)
+
+```python
+from fennec.llm import GeminiInterface
+
+llm = GeminiInterface(api_key=api)
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | توليد الإجابات بناءً على السياق المسترجع |
+| **النموذج** | Google Gemini |
+| **الاستخدام** | يُمرَّر إلى `RAGSystem` |
+
+---
+
+### 5. `MultilanguageTextChunker` — مقسّم النصوص
+
+```python
+from fennec.chunks import MultilanguageTextChunker
+
+chunker = MultilanguageTextChunker()
+```
+
+| الخاصية | الوصف |
+|---------|-------|
+| **الغرض** | تقسيم المستندات الطويلة إلى قطع أصغر قابلة للفهرسة |
+| **الميزة** | يدعم اللغات المتعددة بما فيها العربية |
+| **الإعداد** | `chunk_size=500`, `overlap=80` (عبر `RAGConfig`) |
+
+---
+
+### 6. `ContextManager` — مدير السياق
+
+```python
+from fennec.context import ContextManager, ContextConfig
+
+ctx_config = ContextConfig(
+    max_context_length = 3000,
+    include_scores     = True,
+    template           = "english",
+)
+context_manager = ContextManager(config=ctx_config)
+```
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `max_context_length` | `3000` | الحد الأقصى لطول السياق المُدخَل إلى النموذج |
+| `include_scores` | `True` | تضمين درجات التشابه مع كل قطعة |
+| `template` | `"english"` | قالب بناء الـ Prompt |
+
+---
+
+### 7. `RAGConfig` — إعدادات النظام
+
+```python
+from fennec.rag.core import RAGConfig
+
+rag_config = RAGConfig(
+    chunk_size            = 500,
+    overlap               = 80,
+    top_k                 = 4,
+    min_score             = 0.20,
+    enable_reranking      = True,
+    rerank_mode           = "heuristic",
+    enable_prompt_routing = True,
+    prompt_language       = "en",
+    include_few_shot      = True,
+)
+```
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `chunk_size` | `500` | حجم كل قطعة نصية بالحروف |
+| `overlap` | `80` | عدد الحروف المتداخلة بين قطعتين متتاليتين |
+| `top_k` | `4` | عدد القطع المسترجعة لكل سؤال |
+| `min_score` | `0.20` | الحد الأدنى لقبول القطعة (20% تشابه) |
+| `enable_reranking` | `True` | إعادة ترتيب النتائج بعد الاسترجاع |
+| `rerank_mode` | `"heuristic"` | طريقة إعادة الترتيب (قائمة على قواعد) |
+| `enable_prompt_routing` | `True` | الكشف التلقائي عن نوع السؤال |
+| `prompt_language` | `"en"` | لغة الـ Prompt الافتراضية |
+| `include_few_shot` | `True` | تضمين أمثلة توضيحية في الـ Prompt |
+
+---
+
+### 8. `RAGSystem` — النظام الرئيسي
+
+```python
+from fennec.rag.core import RAGSystem
+
+rag = RAGSystem(
+    vector_db       = vector_db,
+    llm             = llm,
+    chunker         = chunker,
+    context_manager = context_manager,
+    config          = rag_config,
+)
+```
+
+النظام الجوهري الذي يربط جميع المكونات السابقة ويوفر الواجهات التالية:
+
+| الدالة | الوصف |
+|--------|-------|
+| `rag.add_documents(loader)` | إضافة مستندات إلى قاعدة المعرفة |
+| `rag.retrieve(query, top_k)` | استرجاع أقرب القطع لسؤال معين |
+| `rag.generate(query, ...)` | توليد إجابة كاملة باستخدام LLM |
+| `rag.get_stats()` | إحصائيات عن حالة النظام |
+
+---
+
+## تدفق التطبيق
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        INITIALIZATION                        │
+│  TextLoader → GeminiEmbedder → FAISSVectorDatabase          │
+│  GeminiInterface → MultilanguageTextChunker → ContextManager│
+│  RAGConfig → RAGSystem                                       │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     KNOWLEDGE BASE SETUP                     │
+│  rag.add_documents() ── تقطيع ── تضمين ── فهرسة FAISS        │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      DIRECT Q&A (5 أسئلة)                   │
+│  rag.retrieve() ── rag.generate() ── عرض النتائج            │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    EVALUATION (RAGEvaluator)                 │
+│  تقييم الأمانة ── الصلة ── الاكتمال ── كشف الهلوسة          │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        OUTPUT                                │
+│  تقرير JSON ── Dashboard HTML                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## الإعداد والتهيئة
+
+### المتطلبات
+
+```bash
+pip install fennec-rag faiss-cpu google-generativeai
+```
+
+### متغيرات البيئة
+
+```python
+api = "YOUR_GEMINI_API_KEY"  # مفتاح Gemini API
+```
+
+### ملفات الإدخال
+
+| الملف | الوصف |
+|-------|-------|
+| `company_overview.txt` | المستند النصي الرئيسي لقاعدة المعرفة |
+
+---
+
+## مراحل التشغيل
+
+### المرحلة 1 — إضافة قاعدة المعرفة
+
+```python
+results = rag.add_documents(company_overview_loader)
+# {'doc_id': num_chunks, ...}
+
+stats = rag.get_stats()
+# total_documents, total_chunks, vector_db_size
+```
+
+### المرحلة 2 — الأسئلة المباشرة
+
+يُشغّل النظام **5 أسئلة** ويعرض لكل منها:
+- عدد القطع المسترجعة ودرجات تشابهها
+- أول 200 حرف من الإجابة المولّدة
+
+```python
+retrieved = rag.retrieve(question, top_k=3)
+answer    = rag.generate(question, include_sources=False, language="en")
+```
+
+### المرحلة 3 — الاسترجاع والتوليد التفصيلي
+
+```
+السؤال
+  │
+  ├─► تضمين السؤال (GeminiEmbedder)
+  │
+  ├─► بحث FAISS عن أقرب top_k قطع
+  │
+  ├─► تصفية القطع بـ min_score=0.20
+  │
+  ├─► إعادة الترتيب (heuristic reranking)
+  │
+  ├─► بناء السياق (ContextManager, max=3000)
+  │
+  └─► توليد الإجابة (GeminiInterface)
+```
+
+---
+
+## نظام التقييم
+
+### `RAGEvaluator`
+
+```python
+from fennec.evaluator import RAGEvaluator
+
+evaluator = RAGEvaluator(
+    rag                     = rag,
+    hallucination_threshold = 0.65,
+    verbose                 = True,
+)
+
+report = evaluator.evaluate(
+    questions         = EVAL_QUESTIONS,
+    reference_answers = REFERENCE_ANSWERS,
+)
+```
+
+### مقاييس التقييم
+
+| المقياس | الوصف |
+|---------|-------|
+| **Faithfulness** | مدى التزام الإجابة بالمصادر المسترجعة |
+| **Relevance** | مدى ارتباط الإجابة بالسؤال |
+| **Completeness** | مدى شمولية الإجابة مقارنةً بالإجابة المرجعية |
+| **Overall Score** | درجة مركّبة من المقاييس الثلاثة |
+| **Grade** | تقدير نهائي (A / B / C / D / F) |
+
+### `HallucinationGuard` — كاشف الهلوسة
+
+| المعامل | القيمة | الوصف |
+|---------|--------|-------|
+| `hallucination_threshold` | `0.65` | إذا تجاوز confidence_score هذه القيمة → لا هلوسة |
+| `is_hallucination` | `bool` | هل الإجابة تحتوي هلوسة؟ |
+| `confidence_score` | `float` | درجة الثقة في صحة الإجابة |
+| `recommendation` | `str` | اقتراح لتحسين الإجابة في حال وجود هلوسة |
+
+### تفاصيل الاسترجاع لكل سؤال
+
+```python
+r = result.retrieval
+# r.top_score    — أعلى درجة تشابه
+# r.avg_score    — متوسط درجات التشابه
+# r.num_chunks   — عدد القطع المسترجعة
+# r.quality_label — تصنيف جودة الاسترجاع
+# r.latency_ms   — زمن الاسترجاع بالميلي ثانية
+
+g = result.generation
+# g.grade              — التقدير (A–F)
+# g.overall_score      — الدرجة الكلية
+# g.faithfulness_score — درجة الأمانة
+# g.relevance_score    — درجة الصلة
+# g.completeness_score — درجة الاكتمال
+# g.latency_ms         — زمن التوليد
+```
+
+### `MetricsCollector` — جمع المقاييس
+
+```python
+metrics = evaluator.get_metrics_summary()
+# metrics["counters"]  — عدادات (عدد الطلبات، الأخطاء...)
+# metrics["gauges"]    — قيم متغيرة (آخر درجة، متوسط زمن...)
+```
+
+---
+
+## المخرجات
+
+### هيكل مجلد الإخراج
+
+```
+dashbord_output/
+└── eval_dashboard.html   # لوحة تحكم تفاعلية
+```
+
+### `generate_dashboard`
+
+```python
+from fennec.evaluator import generate_dashboard
+
+generate_dashboard(report, output_path="./dashbord_output/eval_dashboard.html")
+```
+
+يولّد ملف HTML تفاعلي يعرض:
+- درجات كل سؤال
+- توزيع التقديرات (A–F)
+- رسوم بيانية للمقاييس
+- تفاصيل الهلوسة وتوصيات التحسين
+
+---
+
+## إحصائيات النظام النهائية
+
+```python
+final_stats = rag.get_stats()
+```
+
+| المقياس | الوصف |
+|---------|-------|
+| `total_documents` | عدد المستندات المضافة |
+| `total_chunks` | إجمالي القطع المفهرسة |
+| `total_queries` | إجمالي الاستعلامات المنفّذة |
+| `successful_queries` | عدد الاستعلامات الناجحة |
+| `failed_queries` | عدد الاستعلامات الفاشلة |
+| `vector_db_size` | حجم قاعدة بيانات المتجهات |
+| `chunker_type` | نوع مقسّم النصوص المستخدم |
+
+---
+
+## ملاحظات تقنية
+
+> **اختيار `chunk_size`:** القطع الصغيرة تعطي دقة أعلى لكنها تفقد السياق؛ القطع الكبيرة تحتفظ بالسياق لكنها تُضعف الإشارة. `500` حرف مع `overlap=80` هو نقطة بداية مثالية.
+
+> **`min_score=0.20`:** يضمن استبعاد القطع غير ذات الصلة مما يُقلل الضجيج في الـ Prompt.
+
+> **`enable_reranking`:** يُعيد ترتيب القطع بعد الاسترجاع الأولي مما يحسّن جودة السياق المُقدَّم للنموذج.
+
+> **`hallucination_threshold=0.65`:** عتبة محافظة تُعلّم بالهلوسة المحتملة مبكراً قبل أن تصبح مشكلة.
+
+---
+

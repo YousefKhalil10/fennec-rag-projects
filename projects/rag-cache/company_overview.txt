@@ -1,0 +1,135 @@
+**RAG** اختصار لـ **Retrieval-Augmented Generation**، وده واحد من أهم الأساليب الحديثة في بناء أنظمة الذكاء الاصطناعي، خصوصًا لما تستخدم نماذج اللغة (LLMs) زي GPT.
+
+خليني أشرحلك بشكل بسيط ثم ندخل في العمق 👇
+
+---
+
+## 🧠 يعني إيه RAG؟
+
+RAG هو نظام بيجمع بين حاجتين:
+
+1. **Retrieval (الاسترجاع)** → يجيب معلومات من مصدر خارجي (زي قاعدة بيانات أو ملفات)
+2. **Generation (التوليد)** → يستخدم نموذج لغوي علشان يولد إجابة بناءً على المعلومات دي
+
+بمعنى:
+بدل ما النموذج يعتمد على معلوماته القديمة فقط، بيجيب معلومات جديدة "في الوقت الحقيقي" وبعدين يرد.
+
+---
+
+## 🔄 ازاي RAG بيشتغل؟
+
+الـ Pipeline الأساسي بيكون كده:
+
+1. **User Query**
+   المستخدم يسأل سؤال
+
+2. **Embedding**
+   نحول السؤال لـ vector (أرقام)
+
+3. **Search / Retrieval**
+   نبحث في قاعدة بيانات vector (زي FAISS أو Chroma)
+
+4. **Top-K Documents**
+   نجيب أفضل نصوص مرتبطة بالسؤال
+
+5. **Prompt Construction**
+   نحط النصوص دي + السؤال في Prompt
+
+6. **LLM Response**
+   النموذج يولد الإجابة بناءً على السياق
+
+---
+
+## 🧩 مكونات RAG
+
+### 1. Document Loader
+
+* تحميل البيانات (PDF, TXT, HTML...)
+
+### 2. Text Chunking
+
+* تقسيم النصوص لقطع صغيرة (chunks)
+
+### 3. Embeddings
+
+* تحويل النصوص لـ vectors
+* زي: OpenAI embeddings / Gemini / Sentence Transformers
+
+### 4. Vector Database
+
+* تخزين والبحث في الـ vectors
+* أمثلة:
+
+  * FAISS
+  * ChromaDB
+  * Pinecone
+
+### 5. Retriever
+
+* يجيب أفضل chunks مناسبة للسؤال
+
+### 6. LLM
+
+* يولد الإجابة (GPT / LLaMA / Gemini...)
+
+---
+
+## 🔥 مميزات RAG
+
+* ✅ معلومات محدثة (مش معتمد على training فقط)
+* ✅ يقلل hallucination (الهبد)
+* ✅ يشتغل على بياناتك الخاصة (Private data)
+* ✅ مناسب للـ Chatbots و QA systems
+
+---
+
+## ⚠️ عيوب RAG
+
+* ❌ latency أعلى (فيه search + generation)
+* ❌ محتاج tuning كويس (chunk size, top-k)
+* ❌ quality بيعتمد على جودة الـ retrieval
+
+---
+
+## 🧠 استخدامات RAG
+
+* Chatbots للشركات
+* البحث في الوثائق (Document QA)
+* Support systems
+* AI Agents
+* تحليل بيانات داخلية
+
+---
+
+## 💡 مثال بسيط
+
+لو عندك ملفات عن شركتك:
+
+> المستخدم: "ايه سياسات الإرجاع؟"
+
+RAG يعمل:
+
+* يجيب الجزء اللي فيه سياسة الإرجاع من الداتا
+* يديه للـ LLM
+* يرد بإجابة دقيقة من بياناتك
+
+---
+
+## 🚀 الفرق بين RAG و Fine-tuning
+
+| RAG                             | Fine-tuning        |
+| ------------------------------- | ------------------ |
+| بيستخدم داتا خارجية وقت التشغيل | بيدرب النموذج نفسه |
+| سريع في التحديث                 | بطيء ومكلف         |
+| مناسب للـ dynamic data          | مناسب للـ behavior |
+
+---
+
+## 🔥 نصايح لو هتعمل RAG قوي
+
+* استخدم chunking ذكي (semantic مش fixed بس)
+* جرب reranking
+* استخدم hybrid search (BM25 + vector)
+* اعمل caching
+* راقب hallucination
+
