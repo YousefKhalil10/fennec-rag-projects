@@ -1,231 +1,103 @@
-<div align="center">
+# Fennec-RAG 🦊  DEVELOPER : "Yousef Khalil"
 
-# 🦊 Fennec RAG Projects
+## 📌 Overview
 
-**مجموعة مشاريع RAG مبنية على مكتبة `fennec-rag` مع Gemini AI**
+**Fennec-RAG** is a lightweight, flexible Retrieval-Augmented Generation
+(RAG) framework designed to simplify building intelligent applications
+powered by Large Language Models (LLMs).
 
-[![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Gemini](https://img.shields.io/badge/Gemini-AI-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev)
-[![FAISS](https://img.shields.io/badge/FAISS-Vector_DB-FF6B35?style=flat-square)](https://faiss.ai)
-[![Pinecone](https://img.shields.io/badge/Pinecone-Vector_DB-00C4B4?style=flat-square)](https://pinecone.io)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+It enables developers to seamlessly connect data sources, vector
+databases, and LLM providers to create powerful AI-driven systems such
+as chatbots, knowledge bases, and semantic search engines.
 
-</div>
+------------------------------------------------------------------------
 
----
+## 🚀 Key Features
 
-## 📖 نظرة عامة
+-   🔍 **Advanced Retrieval Pipeline**
+    -   Efficient document ingestion, chunking, and indexing
+    -   Semantic search with high accuracy
+-   ⚡ **Lightweight & Modular**
+    -   Minimal setup required
+    -   Plug-and-play architecture
+-   🔗 **Flexible Integrations**
+    -   Easily connect to different LLMs and vector databases
+    -   Custom retrievers and pipelines supported
+-   🧠 **Context-Aware Generation**
+    -   Improves LLM responses using relevant retrieved data
+    -   Reduces hallucinations
+-   📦 **Production Ready**
+    -   Scalable design
+    -   Suitable for real-world applications
 
-هذا الـ repository يضم **6 مشاريع تطبيقية** تُغطّي جوانب مختلفة من بناء أنظمة **Retrieval-Augmented Generation (RAG)** باستخدام Python، تتدرّج من الإعداد الأساسي إلى ميزات متقدمة مثل المراقبة، الذاكرة التحادثية، والتخزين المؤقت.
+------------------------------------------------------------------------
 
-```
-RAG Core ──► Monitoring ──► Observability ──► Memory ──► Cache ──► Plugin System ──► Evaluator
-```
+## 🤖 LLM Support
 
----
+Fennec-RAG supports multiple Large Language Model providers:
 
-## 🗂️ المشاريع
+-   OpenAI (GPT models)
+-   Anthropic (Claude)
+-   Google (Gemini)
+-   Local models via:
+    -   Ollama
+    -   HuggingFace Transformers
 
-### 1. 📡 `rag_monitor` — RAG مع مراقبة الأداء
+------------------------------------------------------------------------
 
-نظام RAG يُضيف طبقة **Monitoring** كاملة تقيس كل خطوة من خطوات الاسترجاع والتوليد.
+## 🗄️ Vector Database Support
 
-**الميزات:**
-- قياس زمن الاستجابة (Latency) لكل مرحلة
-- تتبّع عدد القطع المُسترجَعة ودرجات التشابه
-- مقاييس `Counter`, `Timer`, `Gauge`, `Histogram`
-- `HTMLStringLoader` لتحميل المستندات بصيغة HTML
+Compatible with popular vector databases:
 
-```python
-monitored_rag_query(query)
-# ➜ يُنفّذ RAG ويسجّل المقاييس في MetricsCollector
-```
+-   Pinecone
+-   FAISS
+-   Chroma
+------------------------------------------------------------------------
 
----
+## ✨ Advantages
 
-### 2. 🔭 `rag_observability` — RAG مع لوحة مراقبة حية
+-   🔹 Easy to use for beginners and professionals
+-   🔹 Highly customizable architecture
+-   🔹 Fast performance with optimized retrieval
+-   🔹 Supports both cloud and local deployments
+-   🔹 Reduces development time for RAG applications
 
-نظام RAG متكامل مع **Observability** متقدمة وبث مباشر (Streaming) واكتشاف الشذوذات.
+------------------------------------------------------------------------
 
-**الميزات:**
-- `RAGObservabilityWrapper` يجمع RAG + Metrics + Chat Logger
-- اكتشاف الشذوذات في الوقت الفعلي (Anomaly Detection)
-- نظام تنبيهات (Alerts) قابل للتهيئة
-- دعم `ConversationLogger` لتسجيل سجل المحادثة
-- دعم Jupyter / بيئات تفاعلية
+## 🛠️ Use Cases
 
-```python
-wrapper = RAGObservabilityWrapper(rag, observability, logger)
-wrapper.query("سؤالك هنا")
-```
+-   💬 AI Chatbots
+-   📚 Knowledge Base Systems
+-   🔎 Semantic Search Engines
+-   🧾 Document Q&A Systems
+-   🧠 AI Assistants
 
----
+------------------------------------------------------------------------
 
-### 3. 🧠 `rag_memory` — RAG مع ذاكرة تحادثية
+## 📥 Installation
 
-نظام RAG تحادثي يحتفظ بسياق المحادثة عبر الأسئلة المتعددة باستخدام **Pinecone**.
-
-**الميزات:**
-- دعم **3 أنواع من الذاكرة**: `BufferMemory`, `SummaryMemory`, `WindowMemory`
-- قاعدة بيانات متجهية `PineconeVectorDatabase`
-- استرجاع يأخذ سياق المحادثة السابقة في الاعتبار
-
-```python
-# اختر نوع الذاكرة
-memory = BufferMemory()        # كل سجل المحادثة
-memory = SummaryMemory(llm)    # ملخص ذكي
-memory = WindowMemory(k=5)     # آخر 5 رسائل
-```
-
-| النوع | الوصف | الأنسب لـ |
-|-------|-------|-----------|
-| `BufferMemory` | يحتفظ بكل التاريخ | محادثات قصيرة |
-| `SummaryMemory` | يُلخّص التاريخ بالـ LLM | محادثات طويلة |
-| `WindowMemory(k)` | آخر k رسالة فقط | نوافذ ثابتة الحجم |
-
----
-
-### 4. ⚡ `rag-cache` — RAG مع تخزين مؤقت متعدد المستويات
-
-نظام RAG مُدعَّم بـ **MultiLevelCache** يتجنّب الطلبات المكررة إلى نموذج اللغة.
-
-**الميزات:**
-- كاش L1 (سريع) + L2 (أكبر)
-- استراتيجية `LRU` للإزاحة
-- TTL قابل للضبط
-- إحصائيات Hit Rate في الوقت الفعلي
-
-```python
-cache_config = CacheConfig(l1_max_items=100, l2_max_items=500, default_ttl=600)
-cache = MultiLevelCache(strategy=CacheStrategy.LRU, config=cache_config)
-
-answer, from_cache = cached_rag_query("سؤالك")
-# ⚡ Cache (0.2ms)  أو  🔄 RAG (1200ms)
+``` bash
+pip install fennec-rag
 ```
 
----
 
-### 5. 🔌 `rag_plugin` — RAG مع نظام إضافات
 
-نظام **Plugin Pipeline** قابل للتوسعة يُمرّر الاستعلام عبر سلسلة إضافات متسلسلة.
+------------------------------------------------------------------------
 
-**الميزات:**
-- نمط معماري **Plugin Pipeline**
-- `HTMLStringLoader` لتحميل المستندات
-- 3 إضافات جاهزة: `QueryCleaner` → `RAGQuery` → `AnswerValidator`
+## 📄 License
 
-```
-الاستعلام الخام
-     │
-     ▼
-QueryCleaner   ① تنظيف النص وتوحيد علامات الترقيم
-     │
-     ▼
-RAGQuery       ② استرجاع المستندات + توليد الإجابة
-     │
-     ▼
-AnswerValidator ③ التحقق من جودة الإجابة
-     │
-     ▼
-الإجابة النهائية
-```
+MIT License
 
----
+------------------------------------------------------------------------
 
-### 6. 📊 `rag_evaluater` — RAG مع تقييم الجودة
+## ❤️ Contributing
 
-نظام RAG كامل مع **تقييم آلي** لجودة الإجابات وتوليد لوحة تحكم تفاعلية.
+Contributions are welcome! Feel free to open issues or submit pull
+requests.
 
-**الميزات:**
-- `RAGEvaluator` يقيّم الإجابات تلقائيًا
-- `generate_dashboard` لتوليد تقرير HTML تفاعلي
-- مقاييس: الدقة، الاسترجاع، F1-Score، التماسك
+------------------------------------------------------------------------
 
-```python
-evaluator = RAGEvaluator(llm=llm)
-results = evaluator.evaluate(questions, answers, contexts)
-generate_dashboard(results, output="dashboard.html")
-```
+## 🦊 Why Fennec?
 
----
-
-## 🏗️ البنية العامة للمشاريع
-
-```
-fennec-rag-projects/
-├── rag_monitor/
-│   ├── main.py
-│   ├── company_overview.txt
-│   └── README.md
-├── rag_observability/
-│   ├── main.py
-│   ├── company_overview.txt
-│   └── README.md
-├── rag_memory/
-│   ├── main.py
-│   ├── company_overview.txt
-│   └── README.md
-├── rag-cache/
-│   ├── main.py
-│   ├── company_overview.txt
-│   └── README.md
-├── rag_plugin/
-│   ├── main.py
-│   ├── company_overview.txt
-│   └── README.md
-├── rag_evaluater/
-│   ├── main.py
-│   ├── company_overview.txt
-│   └── README.md
-└── README.md  ← أنت هنا
-```
-
----
-
-## 🚀 البدء السريع
-
-### المتطلبات
-
-```bash
-pip install fennec-rag faiss-cpu google-generativeai pinecone-client
-```
-
-### الإعداد
-
-```python
-# ضع مفتاح Gemini API
-api = "YOUR_GEMINI_API_KEY"
-```
-
-### تشغيل أي مشروع
-
-```bash
-cd rag_monitor   # أو أي مشروع آخر
-python main.py
-```
-
----
-
-## 🛠️ التقنيات المستخدمة
-
-| التقنية | الاستخدام |
-|---------|-----------|
-| `fennec-rag` | المكتبة الأساسية لبناء أنظمة RAG |
-| `Gemini AI` | نموذج اللغة الكبير (LLM) والتضمينات |
-| `FAISS` | قاعدة البيانات المتجهية المحلية |
-| `Pinecone` | قاعدة البيانات المتجهية السحابية |
-| `Python 3.9+` | لغة البرمجة |
-
----
-
-## 📄 الترخيص
-
-هذا المشروع مرخّص تحت رخصة [MIT](LICENSE).
-
----
-
-<div align="center">
-
-**بُني بـ 🦊 fennec-rag **
-
-</div>
+Named after the **Fennec Fox**, known for its intelligence and
+adaptability --- just like this framework.
