@@ -1,5 +1,6 @@
-
-
+<p align="center">
+  <img src="Fennec-RAG_logo_design-removebg-preview.png" alt="Fennec-RAG " width="300"/>
+</p>
 
 # Fennec-RAG 🦊  
 
