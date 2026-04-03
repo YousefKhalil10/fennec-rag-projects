@@ -1,4 +1,29 @@
-# Fennec-RAG 🦊  DEVELOPER : "Yousef Khalil"
+
+```{=html}
+<p align="center">
+```
+`<img src="assets/logo.png" width="180"/>`{=html}
+```{=html}
+</p>
+```
+```{=html}
+<h1 align="center">
+```
+Fennec-RAG 🦊
+```{=html}
+</h1>
+```
+```{=html}
+<p align="center">
+```
+Lightweight & Modular Retrieval-Augmented Generation Framework
+```{=html}
+</p>
+```
+
+# Fennec-RAG 🦊  
+
+DEVELOPER : "Yousef Khalil"
 
 ## 📌 Overview
 
