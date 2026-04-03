@@ -7,12 +7,12 @@ from typing import Dict, List, Optional, Tuple
 
 # ── مكوّنات المكتبة ──────────────────────────────────────────────────────
 from fennec.llm import MistralInterface
-from fennec.mbeddings import MistralEmbedder
+from fennec.embeddings import OllamaEmbedder
 from fennec.chunks import MultilanguageTextChunker
 from fennec.vector_database import FAISSVectorDatabase
 from fennec.context import ContextManager
 from fennec.rag.core import RAGSystem, RAGConfig
-from document_loaders import TextLoader
+from fennec.document_loaders import TextLoader
 from fennec.rag.streaming_rag import StreamingRAG, StreamConfig, EventType
 from fennec.observability import (
     ObservabilityConfig,
@@ -36,7 +36,7 @@ logging.basicConfig(
 # ════════════════════════════════════════════════════════════════════════════
 loader=TextLoader("company_overview.txt").load()
 llm      = MistralInterface(api_key=api)
-embedder = MistralEmbedder(api_key=api)
+embedder = OllamaEmbedder()
 chunker  = MultilanguageTextChunker(chunk_size=200, overlap=50)
 vd       = FAISSVectorDatabase(embedder=embedder)
 context  = ContextManager()
