@@ -1,0 +1,801 @@
+# 📚 توثيق مكتبة Fennec — تطبيق RAG + Observability + RagChatUI
+
+> **Fennec-rag** هي مكتبة Python متكاملة لبناء أنظمة RAG (Retrieval-Augmented Generation) مع مراقبة أداء شاملة وواجهة دردشة تفاعلية جاهزة للاستخدام.
+
+---
+
+## 📋 جدول المحتويات
+
+1. [نظرة عامة على المكتبة](#-نظرة-عامة-على-المكتبة)
+2. [بنية الحزم (Package Structure)](#-بنية-الحزم)
+3. [المكوّنات الأساسية](#-المكوّنات-الأساسية)
+4. [فئة RAGObservabilityWrapper](#-فئة-ragobservabilitywrapper)
+5. [دوال البناء المساعدة](#-دوال-البناء-المساعدة)
+6. [نظام التنبيهات والمراقبة](#-نظام-التنبيهات-والمراقبة)
+7. [المقاييس المُرصَدة](#-المقاييس-المُرصَدة)
+8. [تدفق البيانات](#-تدفق-البيانات)
+9. [الإعداد والتشغيل](#-الإعداد-والتشغيل)
+10. [نقاط النهاية](#-نقاط-النهاية)
+11. [الإيقاف النظيف والإحصائيات النهائية](#-الإيقاف-النظيف-والإحصائيات-النهائية)
+12. [مرجع API سريع](#-مرجع-api-سريع)
+
+---
+
+## 🦊 نظرة عامة على المكتبة
+
+**Fennec** تدمج ثلاثة أنظمة رئيسية في منظومة واحدة:
+
+| النظام | الوصف | المنفذ |
+|--------|--------|--------|
+| **RAG System** | استرجاع المعلومات وتوليد الإجابات بالذكاء الاصطناعي | — |
+| **Observability System** | مراقبة الأداء، كشف الشذوذات، التنبيهات الفورية | `8888` |
+| **RagChatUI** | واجهة دردشة تفاعلية جاهزة للنشر | `7860` |
+
+### المبدأ المعماري
+
+```
+fennec/                ← الحزمة الجذر
+├── llm/               ← نماذج اللغة
+├── embeddings/        ← نماذج التضمين
+├── chunks/            ← تقسيم النصوص
+├── vector_database/   ← قواعد البيانات المتجهية
+├── context/           ← إدارة السياق
+├── rag/               ← النظام الأساسي + UI
+│   ├── core/
+│   ├── streaming_rag/
+│   └── rag_ui/
+└── observability/     ← المراقبة والتتبع
+    └── dashboard/
+```
+
+---
+
+## 📦 بنية الحزم
+
+### الاستيرادات الكاملة
+
+```python
+# نموذج اللغة
+from fennec.llm import MistralInterface
+
+# نموذج التضمين
+from fennec.embeddings import MistralEmbedder
+
+# تقسيم النصوص
+from fennec.chunks import MultilanguageTextChunker
+
+# قاعدة البيانات المتجهية
+from fennec.vector_database import FAISSVectorDatabase
+
+# إدارة السياق
+from fennec.context import ContextManager
+
+# نظام RAG الأساسي
+from fennec.rag.core import RAGSystem, RAGConfig
+
+# RAG مع بث (Streaming)
+from fennec.rag.streaming_rag import StreamingRAG, StreamConfig, EventType
+
+# Observability
+from fennec.observability import (
+    ObservabilityConfig,
+    ObservabilitySystem,
+    AnomalyConfig,
+    MetricType,
+    DashboardExporter,
+)
+from fennec.observability.dashboard import ConversationLogger
+
+# واجهة الدردشة
+from fennec.rag.rag_ui import RagChatUI
+```
+
+---
+
+## 🔧 المكوّنات الأساسية
+
+### 1. `MistralInterface` — نموذج اللغة
+
+```python
+from fennec.llm import MistralInterface
+
+llm = MistralInterface(api_key=api)
+```
+
+**الوصف:** واجهة للتواصل مع نموذج Mistral لتوليد إجابات طبيعية بناءً على السياق المُسترجَع.
+
+**المسؤوليات:**
+- استقبال السياق (مقتطفات نصية) والسؤال وتوليد إجابة مفيدة
+- تحويل المقتطفات المُسترجَعة إلى نص مقروء ومفهوم
+
+---
+
+### 2. `MistralEmbedder` — نموذج التضمين
+
+```python
+from fennec.embeddings import MistralEmbedder
+
+embedder = MistralEmbedder(api_key=api)
+```
+
+**الوصف:** يحوّل النصوص إلى متجهات رقمية (vectors) متعددة الأبعاد لتمكين البحث الدلالي.
+
+**المسؤوليات:**
+- تضمين أسئلة المستخدم للمقارنة مع قاعدة البيانات
+- تضمين مقتطفات النصوص أثناء الفهرسة
+
+> **ملاحظة:** يُلاحَظ أن اسم الوحدة في ملف الكود هو `mbeddings` (بدون حرف `e`)، تحقق من الاسم الصحيح عند الاستيراد إن واجهت أخطاء.
+
+---
+
+### 3. `MultilanguageTextChunker` — مقسّم النصوص متعدد اللغات
+
+```python
+from fennec.chunks import MultilanguageTextChunker
+
+chunker = MultilanguageTextChunker(chunk_size=200, overlap=50)
+```
+
+**الوصف:** يقسّم المستندات الطويلة إلى مقتطفات صغيرة قابلة للفهرسة، مع دعم العربية والإنجليزية وغيرهما.
+
+**المعاملات:**
+
+| المعامل | القيمة الافتراضية | النوع | الوصف |
+|---------|------------------|-------|--------|
+| `chunk_size` | `200` | `int` | الحد الأقصى للكلمات في المقتطف الواحد |
+| `overlap` | `50` | `int` | عدد الكلمات المتداخلة بين المقتطفات المتجاورة |
+
+> **لماذا التداخل؟** يضمن عدم انقطاع المعلومات عند حدود المقتطفات، مما يُحسّن جودة الاسترجاع لاحقاً.
+
+---
+
+### 4. `FAISSVectorDatabase` — قاعدة البيانات المتجهية
+
+```python
+from fennec.vector_database import FAISSVectorDatabase
+
+vd = FAISSVectorDatabase(embedder=embedder)
+```
+
+**الوصف:** يخزّن المتجهات ويُجري البحث التشابهي السريع باستخدام مكتبة FAISS من Meta.
+
+**المعاملات:**
+
+| المعامل | النوع | الوصف |
+|---------|-------|--------|
+| `embedder` | `MistralEmbedder` | النموذج المستخدم لتضمين النصوص الجديدة |
+
+**المسؤوليات:**
+- تخزين تضمينات المقتطفات النصية
+- تنفيذ البحث بالتشابه (similarity search) للعثور على أقرب المقتطفات لسؤال المستخدم
+
+---
+
+### 5. `ContextManager` — مدير السياق
+
+```python
+from fennec.context import ContextManager
+
+context = ContextManager()
+```
+
+**الوصف:** يُدير سياق المحادثة ويتتبّع تاريخها، مما يُمكّن RAGSystem من توليد إجابات سياقية متماسكة.
+
+---
+
+### 6. `RAGSystem` — النظام الأساسي
+
+```python
+from fennec.rag.core import RAGSystem, RAGConfig
+
+rag = RAGSystem(
+    vector_db       = vd,
+    llm             = llm,
+    chunker         = chunker,
+    context_manager = context,
+    config          = RAGConfig(...),
+)
+```
+
+**المعاملات:**
+
+| المعامل | النوع | الوصف |
+|---------|-------|--------|
+| `vector_db` | `FAISSVectorDatabase` | قاعدة البيانات المتجهية للبحث |
+| `llm` | `MistralInterface` | نموذج اللغة للتوليد |
+| `chunker` | `MultilanguageTextChunker` | مقسّم النصوص للفهرسة |
+| `context_manager` | `ContextManager` | مدير سياق المحادثة |
+| `config` | `RAGConfig` | إعدادات النظام |
+
+#### إعدادات `RAGConfig`:
+
+| الإعداد | القيمة | الوصف |
+|---------|--------|--------|
+| `top_k` | `3` | عدد المقتطفات المُسترجَعة لكل سؤال |
+| `min_score` | `0.0` | الحد الأدنى لدرجة التشابه (0 = لا حد أدنى) |
+| `enable_reranking` | `False` | إعادة ترتيب النتائج بعد الاسترجاع (معطّل) |
+| `enable_prompt_routing` | `False` | توجيه الأسئلة لنماذج مختلفة حسب النوع (معطّل) |
+
+---
+
+### 7. `ObservabilitySystem` — نظام المراقبة
+
+```python
+from fennec.observability import ObservabilitySystem, ObservabilityConfig, AnomalyConfig
+
+obs = ObservabilitySystem(config=ObservabilityConfig(...))
+```
+
+#### إعدادات `ObservabilityConfig`:
+
+| الإعداد | القيمة | الوصف |
+|---------|--------|--------|
+| `environment` | `"development"` | بيئة التشغيل |
+| `window_seconds` | `120.0` | النافذة الزمنية لحساب المقاييس (ثانية) |
+| `alert_cooldown_seconds` | `15` | الحد الأدنى بين تنبيهين للمقياس نفسه |
+
+#### إعدادات `AnomalyConfig`:
+
+| الإعداد | القيمة | الوصف |
+|---------|--------|--------|
+| `enabled` | `True` | تفعيل كشف الشذوذات |
+| `algorithm` | `"zscore"` | خوارزمية الكشف (Z-Score) |
+| `zscore_threshold` | `2.5` | عتبة الانحراف المعياري للحكم بالشذوذ |
+| `min_samples` | `5` | الحد الأدنى للعينات قبل بدء الكشف |
+| `window_seconds` | `120.0` | النافذة الزمنية للكشف |
+
+---
+
+### 8. `ConversationLogger` — مسجّل المحادثات
+
+```python
+from fennec.observability.dashboard import ConversationLogger
+
+conv_logger = ConversationLogger(max_turns=500)
+```
+
+**المعاملات:**
+
+| المعامل | القيمة | الوصف |
+|---------|--------|--------|
+| `max_turns` | `500` | الحد الأقصى لعدد المحادثات المحفوظة في الذاكرة |
+
+**الدوال المتاحة:**
+
+```python
+# تسجيل محادثة
+conv_logger.log(
+    session_id    = "chat_ui",
+    query         = "ما هو التعلم الآلي؟",
+    answer        = "التعلم الآلي هو...",
+    latency_ms    = 342.5,
+    sources_count = 3,
+)
+
+# عرض الإحصائيات
+stats = conv_logger.get_stats()
+# {
+#   "total_logged":     int,   ← إجمالي المحادثات
+#   "unique_sessions":  int,   ← عدد الجلسات المختلفة
+#   "avg_latency_ms":   float, ← متوسط زمن الاستجابة
+# }
+```
+
+---
+
+### 9. `DashboardExporter` — لوحة المراقبة
+
+```python
+from fennec.observability import DashboardExporter
+
+dashboard = DashboardExporter(
+    obs,
+    port                = 8888,
+    refresh_seconds     = 2,
+    conversation_logger = conv_logger,
+)
+dashboard.start()  # يعمل في thread منفصل
+```
+
+**المعاملات:**
+
+| المعامل | القيمة | الوصف |
+|---------|--------|--------|
+| `obs` | `ObservabilitySystem` | مصدر المقاييس والتنبيهات |
+| `port` | `8888` | المنفذ الذي تعمل عليه اللوحة |
+| `refresh_seconds` | `2` | معدل تحديث البيانات بالثانية |
+| `conversation_logger` | `ConversationLogger` | مصدر إحصائيات المحادثات |
+
+---
+
+### 10. `RagChatUI` — واجهة الدردشة
+
+```python
+from fennec.rag.rag_ui import RagChatUI
+
+ui = RagChatUI(
+    rag             = wrapper,
+    title           = "🤖 RAG Demo مع Observability",
+    description     = "اسألني عن التعلم الآلي والذكاء الاصطناعي وأنظمة RAG",
+    theme           = "dark",
+    language        = "ar",
+    include_sources = True,
+    max_sessions    = 50,
+    persist_path    = "./sessions.json",
+)
+ui.launch(host="0.0.0.0", port=7860, open_browser=True, debug=False)
+```
+
+**معاملات `RagChatUI`:**
+
+| المعامل | القيمة | النوع | الوصف |
+|---------|--------|-------|--------|
+| `rag` | `wrapper` | `RAGObservabilityWrapper` | مزوّد الإجابات |
+| `title` | نص | `str` | عنوان الواجهة |
+| `description` | نص | `str` | وصف الاستخدام |
+| `theme` | `"dark"` | `str` | المظهر البصري |
+| `language` | `"ar"` | `str` | لغة الواجهة |
+| `include_sources` | `True` | `bool` | عرض مصادر الإجابة |
+| `max_sessions` | `50` | `int` | الحد الأقصى للجلسات المتزامنة |
+| `persist_path` | `"./sessions.json"` | `str` | مسار حفظ الجلسات |
+
+#### آلية `RAGAdapter` داخل `RagChatUI`
+
+الـ `RAGAdapter` يبحث عن دوال الـ `rag` بهذا الترتيب:
+
+```
+للاستعلام:
+  1. generate(query, include_sources)  ← الأولوية القصوى
+  2. query(query)
+  3. ask(query, ...)
+
+للفهرسة:
+  rag.ingest({doc_id: text})
+
+للحذف:
+  rag.delete(doc_id)
+
+للإحصائيات:
+  rag.get_stats()
+```
+
+---
+
+## 🏗️ فئة `RAGObservabilityWrapper`
+
+الفئة المحورية التي تجمع **RAGSystem + ObservabilitySystem + ConversationLogger** في كيان واحد متوافق مع `RagChatUI`.
+
+```python
+wrapper = RAGObservabilityWrapper(
+    rag         = rag,
+    obs         = obs,
+    conv_logger = conv_logger,
+)
+```
+
+### `generate(query, include_sources)` ⭐
+
+```python
+def generate(self, query: str, include_sources: bool = True) -> str
+```
+
+الدالة الرئيسية للاستعلام. تُنفَّذ بالتسلسل التالي:
+
+```
+① تسجيل بدء الاستعلام
+        ↓
+② rag.retrieve(query)         → مقتطفات نصية
+   تسجيل: retrieval_latency_ms
+           retrieved_docs_count
+           avg_similarity_score
+        ↓
+③ rag.generate(query, ...)    → نص الإجابة
+   تسجيل: generation_latency_ms
+           answer_length_chars
+        ↓
+④ conv_logger.log(...)        → حفظ في السجل
+        ↓
+⑤ إعادة الإجابة كـ str
+```
+
+> تُعيد `str` فقط (لا `tuple`) لضمان معالجة صحيحة من `_extract_answer_and_sources` في `RAGAdapter`.
+
+---
+
+### `ingest(docs)` — فهرسة من الـ UI
+
+```python
+def ingest(self, docs: Dict[str, str]) -> Dict[str, int]
+```
+
+يُستدعى تلقائياً من `RAGAdapter` عند رفع ملف من واجهة الدردشة.
+
+```python
+# المدخل
+{"doc_1": "نص المستند الأول...", "doc_2": "نص المستند الثاني..."}
+
+# المُخرَج
+{"doc_1": 5, "doc_2": 3}  # عدد المقتطفات لكل مستند
+```
+
+---
+
+### `add_documents(docs)` — فهرسة برمجية
+
+```python
+def add_documents(self, docs: Dict[str, str]) -> Dict[str, int]
+```
+
+نسخة مكافئة لـ `ingest()` للاستخدام من الكود مباشرة خارج واجهة المستخدم. تستدعي `ingest()` داخلياً.
+
+---
+
+### `delete(doc_id)` — حذف مستند
+
+```python
+def delete(self, doc_id: str) -> bool
+```
+
+يُستدعى من `RAGAdapter` عند حذف مستند. يبحث عن أول دالة متاحة في `RAGSystem` بهذا الترتيب:
+
+| الأولوية | الدالة |
+|---------|--------|
+| 1 | `delete(doc_id)` |
+| 2 | `delete_document(doc_id)` |
+| 3 | `remove(doc_id)` |
+| 4 | `remove_document(doc_id)` |
+
+**المُخرَجات:** `True` عند النجاح، `False` إذا لم تُوجَد أي دالة أو فشلت.
+
+---
+
+### `get_stats()` — إحصائيات الصحة
+
+```python
+def get_stats(self) -> Dict
+```
+
+```python
+{
+    "total_queries":  int,    # إجمالي الاستعلامات منذ بدء التشغيل
+    "active_alerts":  int,    # عدد التنبيهات النشطة حالياً
+    "avg_latency_ms": float,  # متوسط الزمن الكلي للاستعلام
+    "p90_latency_ms": float,  # الـ 90th percentile للزمن الكلي
+    "chat_sessions":  int,    # عدد الجلسات المختلفة في السجل
+    "total_logged":   int,    # إجمالي المحادثات المسجّلة
+}
+```
+
+---
+
+### `retrieve(query, top_k)` — استرجاع مباشر
+
+```python
+def retrieve(self, query: str, top_k: int = 3) -> List[Tuple]
+```
+
+يُجري عملية الاسترجاع دون توليد إجابة، مفيد للاختبار والتشخيص.
+
+---
+
+### `_rec(name, value, mtype, tags)` — مساعد خاص
+
+```python
+def _rec(self, name: str, value: float, mtype: MetricType = MetricType.GAUGE, tags: Optional[Dict] = None) -> None
+```
+
+دالة داخلية خاصة لتسجيل المقاييس في `ObservabilitySystem`، لا تُستدعى من خارج الفئة.
+
+---
+
+## 🛠️ دوال البناء المساعدة
+
+### `build_rag() -> RAGSystem`
+
+```python
+def build_rag() -> RAGSystem:
+    return RAGSystem(
+        vector_db       = vd,
+        llm             = llm,
+        chunker         = chunker,
+        context_manager = context,
+        config          = RAGConfig(
+            top_k                 = 3,
+            min_score             = 0.0,
+            enable_reranking      = False,
+            enable_prompt_routing = False,
+        ),
+    )
+```
+
+دالة مصنع (factory function) تُنشئ `RAGSystem` بالإعدادات الموحّدة. يُوصى باستخدامها بدلاً من الإنشاء اليدوي لضمان الاتساق.
+
+---
+
+### `build_observability() -> ObservabilitySystem`
+
+```python
+def build_observability() -> ObservabilitySystem
+```
+
+تُنشئ `ObservabilitySystem` مُهيَّأً بالكامل مع إضافة **4 قواعد تنبيه** افتراضية تلقائياً.
+
+---
+
+## 🔔 نظام التنبيهات والمراقبة
+
+### قواعد التنبيه الافتراضية
+
+| المعرّف | المقياس | الشرط | الخطورة | الرسالة |
+|---------|---------|-------|---------|---------|
+| `slow_retrieval` | `rag.retrieval_latency_ms` | `> 500ms` | ⚠️ `warning` | زمن الاسترجاع تجاوز 500ms |
+| `very_slow_total` | `rag.total_latency_ms` | `> 3000ms` | 🔴 `critical` | الزمن الكلي تجاوز 3 ثوانٍ |
+| `no_docs_retrieved` | `rag.retrieved_docs_count` | `< 1` | 🔴 `critical` | لم يُسترجَع أي مستند |
+| `low_similarity` | `rag.avg_similarity_score` | `< 0.3` | ⚠️ `warning` | درجة التشابه منخفضة جداً |
+
+### إضافة قاعدة تنبيه مخصصة
+
+```python
+obs.add_alert_rule(
+    rule_id     = "high_error_rate",
+    metric_name = "rag.error_count",
+    condition   = lambda v: v > 5,
+    message     = "معدل الأخطاء مرتفع",
+    severity    = "critical",   # "warning" | "critical"
+)
+```
+
+### كشف الشذوذات (Anomaly Detection)
+
+يستخدم النظام خوارزمية **Z-Score** لاكتشاف القيم الشاذة:
+
+```
+z = (القيمة الحالية - المتوسط) / الانحراف المعياري
+
+إذا |z| > 2.5 → شذوذ مُكتشَف
+```
+
+الشرط: وجود `min_samples = 5` على الأقل في النافذة الزمنية قبل بدء الكشف.
+
+---
+
+## 📊 المقاييس المُرصَدة
+
+| المقياس | النوع | الوحدة | متى يُسجَّل |
+|---------|-------|--------|------------|
+| `rag.query_count` | `COUNTER` | عدد | عند كل استعلام |
+| `rag.retrieval_latency_ms` | `TIMER` | ms | بعد كل استرجاع |
+| `rag.retrieved_docs_count` | `GAUGE` | عدد | بعد كل استرجاع |
+| `rag.avg_similarity_score` | `GAUGE` | 0–1 | إذا وُجدت نتائج |
+| `rag.generation_latency_ms` | `TIMER` | ms | بعد كل توليد |
+| `rag.answer_length_chars` | `GAUGE` | حرف | بعد كل توليد |
+| `rag.total_latency_ms` | `TIMER` | ms | نهاية كل استعلام |
+| `rag.error_count` | `COUNTER` | عدد | عند الأخطاء |
+| `rag.indexing_latency_ms` | `TIMER` | ms | بعد كل فهرسة |
+| `rag.indexed_chunks_count` | `COUNTER` | عدد | بعد كل فهرسة |
+
+### أنواع المقاييس
+
+| النوع | الوصف | مثال |
+|-------|--------|-------|
+| `COUNTER` | يتراكم ولا ينقص | عدد الاستعلامات |
+| `GAUGE` | قيمة آنية تتغير | عدد المقتطفات المُسترجَعة |
+| `TIMER` | لقياس الزمن مع إحصائيات | زمن الاستجابة |
+
+---
+
+## 🔄 تدفق البيانات
+
+### عند طرح سؤال:
+
+```
+المستخدم يكتب سؤالاً
+         │
+         ▼
+  RagChatUI (:7860)
+         │
+         ▼
+  RAGAdapter.generate(query)
+         │
+         ▼
+  RAGObservabilityWrapper.generate(query)
+    ┌────┴────────────────────────────────────┐
+    │                                         │
+    ▼                                         ▼
+rag.retrieve(query)                  obs.record(metrics)
+    │
+    ▼
+FAISSVectorDatabase.search()
+    │
+    ▼
+أقرب 3 مقتطفات + درجات التشابه
+    │
+    ▼
+rag.generate(query + مقتطفات)
+    │
+    ▼
+MistralInterface → نص الإجابة
+    │
+    ▼
+conv_logger.log(...)
+    │
+    ▼
+إعادة الإجابة → RagChatUI → المستخدم
+```
+
+### عند رفع مستند:
+
+```
+المستخدم يرفع ملفاً من RagChatUI
+         │
+         ▼
+RAGAdapter.ingest({doc_id: text})
+         │
+         ▼
+RAGObservabilityWrapper.ingest(docs)
+         │
+         ▼
+rag.add_documents(docs)
+         │
+    ┌────┴────────────────────────────┐
+    ▼                                 ▼
+MultilanguageTextChunker         obs.record(
+  .chunk(text)                     indexing_latency_ms,
+    │                              indexed_chunks_count
+    ▼                            )
+MistralEmbedder.embed(chunks)
+    │
+    ▼
+FAISSVectorDatabase.add(vectors)
+    │
+    ▼
+إعادة {doc_id: n_chunks}
+```
+
+---
+
+## ⚙️ الإعداد والتشغيل
+
+### المتطلبات الأساسية
+
+```bash
+pip install fennec
+# أو من المصدر
+pip install -e .
+```
+
+**المتطلبات الضمنية:**
+- `faiss-cpu` أو `faiss-gpu`
+- مفتاح Mistral API
+
+---
+
+### ترتيب التهيئة في `main()`
+
+```python
+def main():
+    # 1. بناء المكوّنات الأساسية
+    rag = build_rag()
+    obs = build_observability()
+    conv_logger = ConversationLogger(max_turns=500)
+
+    # 2. ربطها في Wrapper واحد
+    wrapper = RAGObservabilityWrapper(rag=rag, obs=obs, conv_logger=conv_logger)
+
+    # 3. تشغيل لوحة المراقبة (thread منفصل)
+    dashboard = DashboardExporter(obs, port=8888, refresh_seconds=2,
+                                  conversation_logger=conv_logger)
+    dashboard.start()
+
+    # 4. فهرسة المستندات الأولية
+    wrapper.add_documents(loader)
+
+    # 5. تشغيل واجهة الدردشة (blocking)
+    ui = RagChatUI(rag=wrapper, ...)
+    ui.launch(host="0.0.0.0", port=7860)
+```
+
+### إعداد مستند مخصص
+
+```python
+# تعريف المستندات للفهرسة
+loader = {
+    "intro_ml":   "مقدمة في التعلم الآلي...",
+    "deep_learn": "الشبكات العصبية العميقة...",
+    "rag_guide":  "دليل أنظمة RAG...",
+}
+
+# API key
+api = "your-mistral-api-key"
+
+# تشغيل
+main()
+```
+
+---
+
+## 🌐 نقاط النهاية
+
+| الخدمة | الرابط | الوصف |
+|--------|--------|--------|
+| **Chat UI** | `http://localhost:7860` | واجهة الدردشة التفاعلية |
+| **Observability Dashboard** | `http://localhost:8888` | لوحة مراقبة الأداء الحية |
+
+**إعدادات الاستضافة:**
+- `host = "0.0.0.0"` — متاح من خارج الجهاز
+- `open_browser = True` — يفتح المتصفح تلقائياً عند التشغيل
+- `debug = False` — وضع الإنتاج
+
+---
+
+## 🛑 الإيقاف النظيف والإحصائيات النهائية
+
+عند الضغط على `Ctrl+C`، يُنفَّذ تلقائياً في الـ `finally` block:
+
+```python
+finally:
+    print_final_stats(obs, conv_logger)  # ① طباعة ملخص شامل
+    obs.stop()                            # ② إيقاف نظام المراقبة
+    dashboard.stop()                      # ③ إيقاف لوحة التحكم
+    print("✅ تم الإيقاف بشكل نظيف")
+```
+
+### مُخرَجات `print_final_stats()`
+
+```
+📊 ملخص الإحصائيات النهائية:
+──────────────────────────────────────────────────
+  إجمالي القياسات  : 1240
+  إجمالي التنبيهات : 3
+  الشذوذات المكتشفة: 1
+
+💬 Live Chat:
+  إجمالي المحادثات : 87
+  جلسات مختلفة    : 12
+  متوسط الاستجابة  : 543.2 ms
+
+📈 rag.total_latency_ms:
+  عدد    : 87
+  متوسط  : 543.2ms
+  p90    : 892.1ms
+  p99    : 1243.7ms
+
+🔔 التنبيهات النشطة: 1
+  [WARNING] rag.avg_similarity_score — درجة التشابه منخفضة جداً
+```
+
+---
+
+## 📖 مرجع API سريع
+
+```python
+# ── الاستعلام ──────────────────────────────────────────────────
+answer = wrapper.generate("ما هو التعلم الآلي؟")
+answer = wrapper.generate("ما هو RAG؟", include_sources=False)
+
+# ── الفهرسة ────────────────────────────────────────────────────
+result = wrapper.add_documents({"doc_id": "محتوى النص..."})
+result = wrapper.ingest({"doc_id": "محتوى النص..."})  # مكافئ
+
+# ── الاسترجاع المباشر ──────────────────────────────────────────
+chunks = wrapper.retrieve("استعلام البحث", top_k=5)
+
+# ── الحذف ──────────────────────────────────────────────────────
+success = wrapper.delete("doc_id")  # True | False
+
+# ── الإحصائيات ─────────────────────────────────────────────────
+stats = wrapper.get_stats()
+
+# ── تسجيل مقياس مخصص ──────────────────────────────────────────
+wrapper._rec("custom.metric", 42.0, MetricType.GAUGE)
+
+# ── التنبيهات النشطة ───────────────────────────────────────────
+alerts = obs.get_active_alerts()
+
+# ── ملخص مقياس معين ────────────────────────────────────────────
+summary = obs.get_metrics_summary("rag.total_latency_ms")
+# {"count": N, "mean": X, "p90": Y, "p99": Z}
+```
+
+---
+
