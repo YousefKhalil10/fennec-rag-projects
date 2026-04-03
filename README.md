@@ -39,6 +39,7 @@ Fennec-RAG supports multiple Large Language Model providers:
 -   OpenAI (GPT models)
 -   Anthropic (Claude)
 -   Google (Gemini)
+-   Mistral
 -   Local models via:
     -   Ollama
     -   HuggingFace Transformers
